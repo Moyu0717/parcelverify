@@ -4,6 +4,7 @@ import os
 import secrets
 import shutil
 import time
+import threading
 from pathlib import Path
 from db import init_db
 from seed import seed_demo
@@ -11,6 +12,21 @@ from seed import seed_demo
 ROOT = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("PV_DATA_DIR", str(ROOT / "data" / "workspaces"))).resolve()
 RETENTION_SECONDS = 24 * 3600
+_TEMPLATE_LOCK = threading.Lock()
+
+def _prepare_template():
+    """Reuse only initial synthetic records; never copy a visitor's mutable data."""
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    template = DATA_ROOT / "demo-template-v2.db"
+    with _TEMPLATE_LOCK:
+        if not template.exists():
+            temporary = DATA_ROOT / "demo-template-v2.build.db"
+            init_db(str(temporary))
+            seed_demo(str(temporary), seed=42)
+            from services.workflow import initialize_reviews
+            initialize_reviews(str(temporary), {"actor_id": "SYSTEM-DEMO", "role": "admin", "session_id": "synthetic-template"})
+            os.replace(temporary, template)
+    return template
 
 def open_workspace(token=None):
     token = token or secrets.token_hex(32)
@@ -23,8 +39,12 @@ def open_workspace(token=None):
         raise ValueError("This workspace expired. Start a new demo.")
     marker.touch()
     path = str(directory / "parcelverify.db")
+    if not Path(path).exists():
+        template = _prepare_template()
+        temporary = directory / "parcelverify.build.db"
+        shutil.copyfile(template, temporary)
+        os.replace(temporary, path)
     init_db(path)
-    seed_demo(path, seed=42)
     return token, path
 
 def prune_expired_workspaces():
@@ -37,3 +57,4 @@ def prune_expired_workspaces():
                 resolved = directory.resolve()
                 if resolved.parent == DATA_ROOT:
                     shutil.rmtree(resolved)
+

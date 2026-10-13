@@ -11,7 +11,7 @@ def main():
     output = ROOT / "dist"
     output.mkdir(exist_ok=True)
     names = ["app.py", "start.py", "workspace.py", "db.py", "seed.py", "contracts.py", "schema.sql",
-             "requirements.txt", "requirements-lock.txt", "README.md", ".gitignore", ".dockerignore",
+             "requirements.txt", "requirements-lock.txt", "requirements-qa.txt", "README.md", ".gitignore", ".dockerignore",
              ".env.example", "Dockerfile", ".streamlit/config.toml"]
     for directory in ("agent", "services", "ui", "tests", "docs", "qa", "fixtures"):
         names.extend(str(file.relative_to(ROOT)).replace("\\", "/") for file in (ROOT / directory).rglob("*")
@@ -45,3 +45,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

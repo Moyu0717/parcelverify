@@ -1,0 +1,3 @@
+# Optional independent browser acceptance; use an installed Chrome/Edge browser.
+playwright==1.63.0
+

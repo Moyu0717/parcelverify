@@ -16,10 +16,11 @@ def main():
         except FileNotFoundError:
             pass
     if "db_path" not in st.session_state:
-        prune_expired_workspaces()
-        token, path = open_workspace()
-        st.session_state.workspace_token, st.session_state.db_path = token, path
-        initialize_reviews(path, {"actor_id": "ADMIN-001", "role": "admin", "session_id": token})
+        with st.spinner("Preparing your isolated demo workspace..."):
+            prune_expired_workspaces()
+            token, path = open_workspace()
+            st.session_state.workspace_token, st.session_state.db_path = token, path
+            initialize_reviews(path, {"actor_id": "ADMIN-001", "role": "admin", "session_id": token})
     from pathlib import Path
     Path(st.session_state.db_path).parent.joinpath(".activity").touch()
     st.sidebar.title("📦 ParcelVerify")
@@ -57,3 +58,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
