@@ -17,10 +17,10 @@ _TEMPLATE_LOCK = threading.Lock()
 def _prepare_template():
     """Reuse only initial synthetic records; never copy a visitor's mutable data."""
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
-    template = DATA_ROOT / "demo-template-v2.db"
+    template = DATA_ROOT / "demo-template-v3.db"
     with _TEMPLATE_LOCK:
         if not template.exists():
-            temporary = DATA_ROOT / "demo-template-v2.build.db"
+            temporary = DATA_ROOT / "demo-template-v3.build.db"
             init_db(str(temporary))
             seed_demo(str(temporary), seed=42)
             from services.workflow import initialize_reviews
@@ -57,4 +57,3 @@ def prune_expired_workspaces():
                 resolved = directory.resolve()
                 if resolved.parent == DATA_ROOT:
                     shutil.rmtree(resolved)
-

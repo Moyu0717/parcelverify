@@ -76,15 +76,15 @@ def test_all_live_pages_and_partner_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "DATA_ROOT", tmp_path)
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
     assert not app.exception
-    assert app.sidebar.radio[0].options == ['Overview', 'Cases', 'Partners']
-    for page in ('Cases', 'Partners', 'Overview'):
-        app.sidebar.radio[0].set_value(page).run()
+    assert not app.sidebar.radio
+    for page in ('Issues', 'Partners', 'Home'):
+        app.button(key='nav-'+page).click().run()
         assert not app.exception
         assert not app.error
-    next(button for button in app.sidebar.button if button.label == 'Settings').click().run()
+    app.button(key='desktop-Settings').click().run()
     app.selectbox(key='role_widget').set_value('partner_user').run()
     assert app.session_state.actor_context['role'] == 'partner_user'
-    app.sidebar.radio[0].set_value('Cases').run()
+    app.button(key='nav-Issues').click().run()
     assert not app.exception
     assert app.session_state.actor_role == 'partner_user'
     from contracts import ActorContext
@@ -95,9 +95,9 @@ def test_all_live_pages_and_partner_scope(tmp_path, monkeypatch):
     assert cohort
     with get_connection(path) as conn:
         assert all(c['partner_id'] == 'P-QUICKRUN' and _is_authorized(conn, ActorContext(**actor), c['shipment_id'], datetime.now(timezone.utc).isoformat())[0] for c in cohort)
-    app.sidebar.radio[0].set_value('Partners').run()
+    app.button(key='nav-Partners').click().run()
     assert not app.exception
     assert app.session_state.actor_context['role'] == 'partner_user'
     assert [button.key for button in app.button if (button.key or '').startswith('partner-')] == ['partner-P-QUICKRUN']
-    next(button for button in app.sidebar.button if button.label == 'Settings').click().run()
+    app.button(key='desktop-Settings').click().run()
     assert app.selectbox(key='role_widget').value == 'partner_user'

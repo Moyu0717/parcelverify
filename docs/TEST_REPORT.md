@@ -1,5 +1,7 @@
 # Test report — 13 October 2026
 
+Current iteration, verified 14 October 2026: **175 passed in 104.47 seconds** after the design/usability rebuild. Log: `qa/artifacts/design-final-tests.log`. Actual Chrome verified 21 screen/viewport combinations at 1440×900, 1024×768 and 390×844, real demo photo enlargement, mobile Menu, first Home issue above the fold, work buttons before imagery on mobile, Back scroll restoration and rendered primary/secondary styles. Artifacts: `qa/artifacts/design-rebuild/`. Keyboard focus and practical 44px controls were checked; no first-time user study or full accessibility certification was performed. See `docs/DESIGN_REBUILD_STATE.md` for current scope and outstanding real Gemini/hosted acceptance. The following records are historical acceptance notes.
+
 Current priority: **UI REFACTOR REQUESTED — GEMINI/REMOTE INVESTIGATION PAUSED**. Core app locally verified; complete remote acceptance has not passed.
 
 | Check | Executed result |

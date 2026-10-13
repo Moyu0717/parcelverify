@@ -1,5 +1,7 @@
 # UI refactor checkpoint — 13 October 2026
 
+Historical checkpoint. The authoritative current UI implementation and verification are recorded in `docs/DESIGN_REBUILD_STATE.md`; the new brief supersedes conflicting Summary/Evidence-tab and sidebar requirements.
+
 Specification: `reference/ParcelVerify_UI_Refactor.md`, read and implemented in the existing Python / Streamlit / SQLite project. Pre-refactor source is preserved at `dist/ParcelVerify-pre-ui-refactor-20261013.zip`.
 
 The revised English interface has exactly three primary destinations, a five-row actionable queue, authorized matching counters, persistent case selection and filters, Summary / Evidence tabs, readable comparisons and provenance, real demonstration photo enlargement, access-specific reviews, explicit request / approval / rejection / application, audited manual closure and readable downloads. Settings and Help are secondary. Demo identities and recovery tools are inside Settings > Demo tools. Missing AI is explicit and does not block evidence or manual handling.

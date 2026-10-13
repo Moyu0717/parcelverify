@@ -4,10 +4,10 @@ maxUploadSize = 10
 enableXsrfProtection = true
 
 [theme]
-primaryColor = "#08624B"
-backgroundColor = "#F6F8F7"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#142A25"
+primaryColor = "#075E49"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF5F0"
+textColor = "#142B24"
 font = "sans serif"
 
 [browser]

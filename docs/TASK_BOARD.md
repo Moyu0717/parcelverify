@@ -1,5 +1,7 @@
 # ParcelVerify — Current task board
 
+Current iteration: `docs/DESIGN_REBUILD_STATE.md` (14 October 2026). Reference-led rebuild implemented and locally validated: 175 tests passed; 21 rendered screen/viewport combinations passed. Hosted Gemini and revised deployment remain unaccepted. The following table records the earlier UI iteration.
+
 Updated 13 October 2026. This board supersedes earlier planning status.
 
 | Deliverable | Status | Evidence / remaining work |

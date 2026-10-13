@@ -6,7 +6,8 @@ import streamlit as st
 from services.review import ensure_access_cases
 from workspace import open_workspace, prune_expired_workspaces
 from ui.presentation import apply_theme
-from ui.workspace_ui import PAGES, route, search, notice
+from ui.workspace_ui import route, search, notice
+from ui.design_ui import PAGES, header
 
 st.set_page_config(page_title="ParcelVerify",page_icon=":material/inventory_2:",layout="wide")
 
@@ -26,9 +27,9 @@ def remember_partner():
     st.session_state.actor_partner=st.session_state.partner_identity_widget
 
 def new_workspace():
-    for key in ("db_path","workspace_token","selected_case_id","selected_shipment_id","proposal_ids","case_search","drafts"):
+    for key in ("db_path","workspace_token","selected_case_id","selected_shipment_id","proposal_ids","case_search","drafts","cancelled_requests","selected_partner_id"):
         st.session_state.pop(key,None)
-    route("Overview")
+    route("Home")
 
 def settings():
     st.title("Settings")
@@ -48,7 +49,7 @@ def settings():
             try:
                 token,path=open_workspace(recovery)
                 st.session_state.workspace_token,st.session_state.db_path=token,path
-                route("Overview"); st.rerun()
+                route("Home"); st.rerun()
             except ValueError as error: st.error(str(error))
         st.button("Start a new demo",on_click=new_workspace)
         with st.form("test-access"):
@@ -71,10 +72,10 @@ def settings():
 def help_page():
     st.title("Help")
     st.subheader("A simple review loop")
-    st.write("1. Open a case from Overview, or find a shipment by its reference.")
+    st.write("1. Open an issue from Home, or find a shipment by its reference in Issues.")
     st.write("2. Check the concern and its evidence. Missing information is not a mismatch.")
     st.write("3. Submit the next step for approval, or record an authorized review decision.")
-    st.info("AI summary is unavailable. You can still review the evidence and handle cases manually.")
+    st.info("AI explanation is unavailable. You can still review the evidence.")
     st.caption("Operational actions and identities are simulated. Demonstration images are not verified parcel photographs. Flags need review; they do not prove wrongdoing.")
 
 def main():
@@ -98,16 +99,9 @@ def main():
     if st.session_state.pop("search_requested",False): search(st.session_state.get("workspace_search",""))
     pending=st.session_state.pop("route_pending",None)
     if pending: st.session_state.primary_destination=pending
-    with st.sidebar:
-        st.html('<div class="pv-brand"><span class="pv-mark">PV</span><span>ParcelVerify</span></div>')
-        st.radio("Navigation",list(PAGES),key="primary_destination",on_change=navigate,label_visibility="collapsed")
-        st.text_input("Find a shipment or case",key="workspace_search",placeholder="Shipment reference")
-        st.button("Find",on_click=request_search,icon=":material/search:",use_container_width=True)
-        st.divider()
-        st.button("Settings",on_click=secondary,args=("Settings",),icon=":material/settings:",use_container_width=True)
-        st.button("Help",on_click=secondary,args=("Help",),icon=":material/help_outline:",use_container_width=True)
-        st.html('<span class="pv-badge pv-badge-neutral">Demo workspace</span>')
-        st.caption("Operational actions are simulated.")
+    if st.session_state.get("primary_destination") not in PAGES:
+        st.session_state.primary_destination="Home"
+    header()
     message=st.session_state.pop("notice",None)
     if message: getattr(st,message[0])(message[1])
     try:

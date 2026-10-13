@@ -1,5 +1,7 @@
 # Verified handoff state — 13 October 2026
 
+Superseded for current UI work by `docs/DESIGN_REBUILD_STATE.md` on 14 October 2026. Navigation is now Home / Issues / Partners with a horizontal header, evidence-first details and 175 passing regression tests. The historical state below records the earlier iteration.
+
 Current priority: implement `reference/ParcelVerify_UI_Refactor.md`, verify local interactions and screenshots, then resume real Gemini and HTTPS acceptance. Never infer real inference from mocked tests.
 
 Python 3.11.9 / Streamlit 1.65.0 / SQLite are retained. Run `python start.py`, or `.venv\Scripts\python.exe start.py` on this Windows checkout. No local Git repository exists; source is published through connected GitHub at `Moyu0717/parcelverify`, preserving the user's `.devcontainer` files.

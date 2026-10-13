@@ -250,7 +250,9 @@ def _generate_events(
         pid = ship["partner_id"]
         actor_id = ACTORS[pid][0]
         ship_start = BASE_DATE + timedelta(
-            days=i, hours=rng.randint(0, 12)
+            # Two synthetic shipments per day keeps all completed fixture
+            # events before the 13 October 2026 demo date (no future activity).
+            days=i // 2, hours=rng.randint(0, 12)
         )
 
         # 1. dispatch_confirmed

@@ -11,7 +11,7 @@ from pathlib import Path
 import streamlit as st
 from agent.runner import investigate_case
 from services.access import query_shipment, check_access_scope
-from services.actions import propose_action, review_action, execute_action
+from services.actions import propose_action, review_action, execute_action, create_evidence_task
 from services.audit import export_audit
 from services.handoff import compare_handoff
 from services.review import list_review_cases, review_counts, record_review_decision
@@ -21,11 +21,14 @@ from ui.live import context, rows, shipments, display_photo
 from ui.presentation import (MYT, ACTION_LABELS, MISSING_LABELS, format_time, format_weight,
     difference_weight, status_label, stage_label, status_badge, issue_label, humanize)
 
-FILTERS = {"Needs review":"needs_review", "Awaiting approval":"awaiting_approval", "Resolved":"resolved", "Review complete":"review_complete", "All":"all"}
+FILTERS = {"Needs review":"needs_review", "Waiting for approval":"awaiting_approval", "Resolved":"resolved", "Review complete":"review_complete", "All":"all"}
 TYPES = {"All":"all", "Shipment checks":"shipment", "Data access":"access"}
 
 def remember_draft(key):
     st.session_state.setdefault("drafts",{})[key]=st.session_state[key]
+
+def cancel_request(case_id,cancelled=True):
+    st.session_state.setdefault("cancelled_requests",{})[case_id]=cancelled
 
 def draft_input(kind,label,scope,field,**kwargs):
     key="draft-"+scope+"-"+field
@@ -35,7 +38,7 @@ def draft_input(kind,label,scope,field,**kwargs):
 def cases():
     return list_review_cases(*context())
 
-def route(destination="Cases", case_id=None, shipment_id=None, bucket=None, partner=None):
+def route(destination="Issues", case_id=None, shipment_id=None, bucket=None, partner=None):
     st.session_state.route_pending = destination
     st.session_state.secondary_view = None
     st.session_state.selected_case_id = case_id
@@ -54,7 +57,7 @@ def notice(text, kind="success"):
 
 def label(case):
     if case["work_bucket"]=="resolved": return "Resolved"
-    if case["has_proposed_actions"]: return "Awaiting approval"
+    if case["has_proposed_actions"]: return "Waiting for approval"
     if case["has_approved_actions"]: return "Ready to apply"
     if case["has_open_tasks"] and case["status"]=="review_completed": return "More information needed"
     return status_label(case["status"])
@@ -236,7 +239,7 @@ def ai_summary(case):
     reports=rows("SELECT * FROM report_versions WHERE case_id=? ORDER BY version DESC",(case["case_id"],))
     runs=rows("SELECT run_id,status,error,model_name,started_at FROM investigation_runs WHERE case_id=? ORDER BY started_at DESC",(case["case_id"],))
     report=json.loads(reports[0]["report_json"]) if reports else None
-    if not report: st.info("AI summary is unavailable. You can still review the evidence.")
+    if not report: st.info("AI explanation is unavailable. You can still review the evidence.")
     else:
         if rows("SELECT event_id FROM events WHERE shipment_id=? AND julianday(received_at)>julianday(?)",(case["shipment_id"],reports[0]["created_at"])):
             st.warning("New evidence has been added since this summary. Review it manually or request an updated summary.")
@@ -247,7 +250,7 @@ def ai_summary(case):
             if fact["evidence_ids"]:
                 with st.expander("Supporting evidence"):
                     for identifier in fact["evidence_ids"]:
-                        st.write("Evidence "+str(source[identifier])+" in Source records" if identifier in source else "Photo or access evidence in the Evidence tab")
+                        st.write("Evidence "+str(source[identifier])+" in Source records" if identifier in source else "Photo or access evidence shown above")
         st.markdown("**What is missing**")
         for item in report["missing_evidence"]: st.write("• "+item)
         if not report["missing_evidence"]: st.caption("No further gaps were listed by this review.")
@@ -256,9 +259,9 @@ def ai_summary(case):
                 for item in report["alternative_explanations"]: st.write(item)
         st.markdown("**Suggested next step**"); st.write(ACTION_LABELS.get(report["recommended_action"],report["recommended_action"]))
     configured=bool(os.environ.get("GEMINI_API_KEY")) if os.environ.get("PV_AI_PROVIDER","gemini")=="gemini" else True
-    if actor["role"] in ("admin","investigator") and st.button("Retry AI summary" if runs and not report else "Generate AI summary",disabled=not configured,key="ai-"+case["case_id"]):
+    if actor["role"] in ("admin","investigator") and st.button("Retry AI explanation" if runs and not report else "Explain this issue with AI",disabled=not configured,key="ai-"+case["case_id"]):
         with st.spinner("Reviewing the recorded evidence..."): result=investigate_case(path,case["case_id"],actor)
-        notice("AI summary saved. Review it before deciding." if result["status"]=="completed" else "AI summary is unavailable. You can still review the evidence.","success" if result["status"]=="completed" else "info"); st.rerun()
+        notice("AI explanation saved. Review it before deciding." if result["status"]=="completed" else "AI explanation is unavailable. You can still review the evidence.","success" if result["status"]=="completed" else "info"); st.rerun()
     st.caption("Flags need review. They do not prove wrongdoing.")
     with st.expander("Technical details"):
         if reports: st.caption("Provider model: "+str(reports[0]["model_name"]))
@@ -270,9 +273,9 @@ def ai_summary(case):
 
 def next_step(case):
     path,actor=context()
-    st.subheader("Next step")
+    st.subheader("Choose what happens next")
     if case["status"]=="closed":
-        st.success("This case is resolved. Evidence and decisions remain available."); return
+        st.success("This issue is resolved. Evidence and decisions remain available."); return
     actions=rows("SELECT action_id,action_type,status,reason FROM action_requests WHERE case_id=? ORDER BY rowid DESC",(case["case_id"],))
     active=[a for a in actions if a["status"] in ("proposed","approved")]
     for index,action in enumerate(active):
@@ -280,6 +283,8 @@ def next_step(case):
             st.write("**"+ACTION_LABELS.get(action["action_type"],humanize(action["action_type"]))+"**")
             status_badge(status_label(action["status"]),"warning")
             st.write(action["reason"] or "No reason was provided.")
+            st.caption("Reviewer: authorized supervisor. Approval and applying the step are separate.")
+            st.caption("Demo only — no message will be sent")
             if actor["role"] in ("admin","approver"):
                 if action["status"]=="proposed":
                     confirmed=st.checkbox("I reviewed this request and its evidence.",key="confirm-"+action["action_id"])
@@ -290,12 +295,24 @@ def next_step(case):
                     if reject.button("Reject request",disabled=not confirmed,key="reject-"+action["action_id"]):
                         review_action(path,action["action_id"],"reject",actor,"Request rejected after evidence review.")
                         notice("Request rejected. It cannot be applied."); st.rerun()
+                    with st.expander("Ask for more information before deciding"):
+                        clarification=st.text_area("What information is needed?",key="clarification-"+action["action_id"])
+                        st.caption("Creates a local information task. This proposal stays waiting for approval; no message is sent.")
+                        if st.button("Record information request",key="clarify-"+action["action_id"]):
+                            if len(clarification.strip())<10:st.error("Describe the missing information in at least 10 characters.")
+                            else:
+                                create_evidence_task(path,case["case_id"],"supplementary_statement",actor,clarification.strip())
+                                notice("Information task recorded. The proposal still needs a decision.");st.rerun()
                 elif st.button("Apply approved step",type="primary" if index==0 else "secondary",key="apply-"+action["action_id"]):
                     result=execute_action(path,action["action_id"],actor)
                     good=result["status"] in ("executed","already_executed")
-                    notice("Approved step recorded. Operational changes are simulated." if good else "This step was not applied. Review the request or ask a supervisor.","success" if good else "error"); st.rerun()
+                    notice("Approved step applied. A local evidence task was created; no message was sent." if good and action["action_type"] in ("request_reweigh","request_rephoto","request_rescan") else "Approved step recorded in this demo; no external operation was performed." if good else "This step was not applied. Review the request or ask a supervisor.","success" if good else "error"); st.rerun()
             else: st.caption("An authorized supervisor must review and apply this request.")
     if actor["role"] in ("admin","investigator") and not active:
+        if st.session_state.get("cancelled_requests",{}).get(case["case_id"]):
+            st.caption("Request cancelled. Your draft is kept; nothing was submitted.")
+            st.button("Prepare a request",on_click=cancel_request,args=(case["case_id"],False))
+            return
         categories={f["category"] for f in case["findings"]}
         values=compare_handoff(path,case["shipment_id"])
         choices=[]
@@ -305,23 +322,35 @@ def next_step(case):
             if "count_discrepancy" in categories or values["count"]["actual"] is None: choices.append("request_rescan")
         choices.append("submit_to_contract_ops")
         with st.container():
-            action_type=st.selectbox("What would help next?",choices,format_func=lambda action:ACTION_LABELS[action])
-            reason=draft_input("text_area","Why is this needed?",case["case_id"],"request-reason",placeholder="Briefly explain which evidence needs checking.",max_chars=2000)
-            submitted=st.button("Submit for approval",type="primary",use_container_width=True,key="submit-step-"+case["case_id"])
+            with st.expander("Other actions"):
+                action_type=st.selectbox("Requested step",choices,format_func=lambda action:ACTION_LABELS[action],key="step-choice-"+case["case_id"])
+            st.markdown("**"+ACTION_LABELS[action_type]+"**")
+            descriptions={"request_reweigh":"Ask for a fresh weighing of this parcel. A supporting photo can be added as evidence.","request_rephoto":"Ask for an additional parcel photo to check the recorded evidence.","request_rescan":"Ask for a new package scan to check the recorded quantity.","submit_to_contract_ops":"Record a referral for an operations review of the issue. This demo does not route the referral to another system."}
+            st.write(descriptions[action_type])
+            initial="The handover weight is "+difference_weight(values["weight_g"]["diff"])+" than the dispatch record." if action_type=="request_reweigh" and values["weight_g"]["diff"] else concern(case)+". Please review the source evidence."
+            reason=draft_input("text_area","Reason for the request",case["case_id"],"request-reason",value=initial,max_chars=2000)
+            st.caption("Shipment: "+case["shipment_id"])
+            st.caption("Reviewer: authorized supervisor (no named reviewer assigned).")
+            st.caption("Intended partner: "+(case["partner_name"] or "Unassigned")+". Delivery contact is not configured.")
+            st.caption("Next state: Waiting for approval. After approval, applying a verification request creates a local evidence task.")
+            st.caption("Demo only — no message will be sent")
+            submitted=st.button("Send request for approval",type="primary",use_container_width=True,key="submit-step-"+case["case_id"])
+            st.button("Cancel request",type="tertiary",key="cancel-"+case["case_id"],on_click=cancel_request,args=(case["case_id"],))
         if submitted:
             if len(reason.strip())<10: st.error("Add a short reason of at least 10 characters. Your draft has been kept.")
             else:
                 fingerprint=hashlib.sha256(json.dumps([case["case_id"],actor["actor_id"],action_type,reason.strip()]).encode()).hexdigest()
                 request_id=st.session_state.setdefault("proposal_ids",{}).setdefault(fingerprint,str(uuid.uuid4()))
                 result=propose_action(path,case["case_id"],action_type,actor,reason=reason.strip(),request_id=request_id)
-                notice("Request submitted for approval. No operational action has been applied." if result["status"]=="proposed" else "This request already has a recorded decision. Change the next step or reason to submit another request."); st.rerun()
+                notice("Request submitted. Waiting for supervisor approval." if result["status"]=="proposed" else "This request already has a recorded decision. Change the next step or reason to submit another request."); st.rerun()
     elif actor["role"]=="partner_user": st.caption("An internal reviewer can request the next verification step.")
     if actor["role"] in ("admin","investigator","approver"):
         with st.expander("Record a review decision"):
             with st.form("decision-"+case["case_id"]):
                 decisions=["review_complete"]+(["close"] if actor["role"] in ("admin","approver") else [])
-                decision=st.selectbox("Decision",decisions,format_func=lambda value:"Record review complete" if value=="review_complete" else "Close reviewed case")
+                decision=st.selectbox("Decision",decisions,format_func=lambda value:"Record review complete" if value=="review_complete" else "Close issue")
                 reason=st.text_area("Decision reason",max_chars=3000)
+                st.caption("Shipment: "+case["shipment_id"]+". Review complete leaves open requests active. Close issue manually closes remaining evidence tasks without verifying them.")
                 confirmed=st.checkbox("I reviewed the evidence and this decision. Closing records a manual disposition of open information requests.")
                 save=st.form_submit_button("Record decision")
             if save:
@@ -330,12 +359,12 @@ def next_step(case):
                     return
                 try:
                     result=record_review_decision(path,case["case_id"],actor,decision,reason)
-                    notice("Case resolved and decision recorded." if result["status"]=="closed" else "Review recorded. Open evidence requests remain available."); st.rerun()
+                    notice("Issue resolved and decision recorded." if result["status"]=="closed" else "Review recorded. Open evidence requests remain available."); st.rerun()
                 except ValueError as error: st.error(str(error))
 
 def case_summary(case):
     value=compare_handoff(context()[0],case["shipment_id"])
-    text=["# ParcelVerify case summary","", "Shipment: "+case["shipment_id"],"Partner: "+(case["partner_name"] or "Not recorded"),"Status: "+label(case),"Updated: "+format_time(case["updated_at"]),"","## What needs checking",concern(case),"","## Recorded evidence"]
+    text=["# ParcelVerify issue summary","", "Shipment: "+case["shipment_id"],"Partner: "+(case["partner_name"] or "Not recorded"),"Status: "+label(case),"Updated: "+format_time(case["updated_at"]),"","## What needs checking",concern(case),"","## Recorded evidence"]
     if case["issue_type"]=="shipment":
         text.extend(["Quantity: "+str(value["count"]["expected"])+" before; "+str(value["count"]["actual"])+" at handover.","Weight: "+format_weight(value["weight_g"]["expected"])+" before; "+format_weight(value["weight_g"]["actual"])+" at handover.","Difference: "+difference_weight(value["weight_g"]["diff"])+".","","## Missing information",*("- "+MISSING_LABELS.get(key,humanize(key)) for key in value["unknowns"])])
     else: text.append("An access request was denied outside the recorded assignment. Legitimate job context still requires review.")
@@ -355,7 +384,7 @@ def activity(case):
             if event["details"].get("reason"): st.write(event["details"]["reason"])
         for action in rows("SELECT action_type,status FROM action_requests WHERE case_id=?",(case["case_id"],)):
             st.write(ACTION_LABELS.get(action["action_type"],humanize(action["action_type"]))+" · "+status_label(action["status"]))
-        st.download_button("Download case summary",case_summary(case),file_name=case["shipment_id"]+"-case-summary.md",mime="text/markdown")
+        st.download_button("Download issue summary",case_summary(case),file_name=case["shipment_id"]+"-issue-summary.md",mime="text/markdown")
         if context()[1]["role"]!="partner_user":
             with st.expander("Audit details"):
                 st.json(audit)
@@ -405,7 +434,7 @@ def add_evidence(shipment):
                 st.error("Evidence was not saved: "+str(error)+" Your draft has been kept.")
 
 def detail(case):
-    st.button("Back to cases",icon=":material/arrow_back:",on_click=back)
+    st.button("Back to issues",icon=":material/arrow_back:",on_click=back)
     st.title(case["shipment_id"])
     st.caption((case["partner_name"] or "Partner")+" · updated "+format_time(case["updated_at"]))
     status_badge(label(case),"success" if case["work_bucket"]=="resolved" else "warning")
@@ -436,7 +465,7 @@ def shipment_detail(shipment):
     if shipment not in shipments(): st.warning("This shipment is not assigned to your role."); return
     result=query_shipment(context()[0],context()[1],shipment)
     if not result["authorized"]: st.warning("This shipment is not available."); return
-    st.button("Back to cases",icon=":material/arrow_back:",on_click=back)
+    st.button("Back to issues",icon=":material/arrow_back:",on_click=back)
     st.title(shipment)
     st.caption("Shipment record · no case is created just to view a shipment.")
     shipment_evidence(shipment); add_evidence(shipment)

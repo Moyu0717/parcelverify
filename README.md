@@ -6,7 +6,7 @@ An English logistics investigation prototype for monitoring external partners an
 
 Use Python 3.11. Install `requirements.txt`, then run `python start.py`. On this checkout, use `.venv\Scripts\python.exe start.py`. Open `http://localhost:8501`.
 
-Three destinations cover the review loop: Overview, Cases and Partners. Open a case once, read its Summary and Evidence, then request a next step, approve or reject it, and apply an approved step separately. Evidence comparisons, actual source records, demonstration photos, access reviews and readable case downloads stay together. Settings contains demo roles and recovery tools. AI failure is explicit; evidence and authorized manual processing remain available. No mock AI reports appear in the product.
+Three horizontal destinations cover the review loop: Home, Issues and Partners. Home explains the service and opens actionable work. Issues shows understandable concerns and evidence first, with requests beside the records on desktop and after them on mobile. Send a request for approval, approve or reject it, then apply an approved step separately. Evidence comparisons, actual source records, demonstration photos, access reviews and readable issue downloads stay together. Workspace > Settings contains demo roles and recovery tools. AI failure is explicit; evidence and authorized manual processing remain available. No mock AI reports appear in the product.
 
 ## Configure Gemini securely
 
@@ -29,8 +29,10 @@ python -m pytest -q
 python qa/real_ai_acceptance.py
 ```
 
-The first command uses temporary databases and deterministic provider mocks. The second makes actual model requests using environment variables and fails honestly if inference is unavailable. It exercises the main exception, supported repackaging and insufficient evidence. It does not automatically read Streamlit Secrets; use Cases > AI summary for secret-configured hosting. Real Gemini and final HTTPS acceptance remain pending; local UI acceptance never substitutes for them.
+The first command uses temporary databases and deterministic provider mocks. The second makes actual model requests using environment variables and fails honestly if inference is unavailable. It exercises the main exception, supported repackaging and insufficient evidence. It does not automatically read Streamlit Secrets; use Issues > Explain this issue with AI for secret-configured hosting. Real Gemini and final HTTPS acceptance remain pending; local UI acceptance never substitutes for them.
 
 Each browser receives a separate synthetic dataset. Save the private recovery token to reopen the same workspace after refresh or application restart while disk data survives. Start a new demo creates a new workspace. Data expires after 24 hours of inactivity; Community Cloud storage may disappear on host restart/redeployment. Export reports and audits before leaving. Role selection illustrates permissions and is not production authentication.
 
 See [deployment](docs/DEPLOYMENT.md), [test report](docs/TEST_REPORT.md), [limitations](docs/KNOWN_LIMITATIONS.md) and the [five-minute demo](docs/DEMO_SCRIPT.md). A deployment URL and remote real-model acceptance are required before claiming the live prototype complete.
+
+The current [design rebuild handoff](docs/DESIGN_REBUILD_STATE.md) records the GREENWAY reference inspection, actual-screen screenshots, 175-test acceptance and remaining hosted blockers. Home's locally stored decorative image has [documented generated provenance](assets/README.md) and never enters shipment evidence.
