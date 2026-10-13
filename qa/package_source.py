@@ -16,8 +16,9 @@ def main():
     for directory in ("agent", "services", "ui", "tests", "docs", "qa", "fixtures"):
         names.extend(str(file.relative_to(ROOT)).replace("\\", "/") for file in (ROOT / directory).rglob("*")
                      if file.is_file() and "__pycache__" not in file.parts and "artifacts" not in file.parts
-                     and file.suffix in (".py", ".md", ".jpg"))
+                     and file.suffix in (".py", ".md", ".jpg", ".css"))
     names.append("reference/ParcelVerify_Codex_Handoff_Workflow.md")
+    names.append("reference/ParcelVerify_UI_Refactor.md")
     manifest, batch, batches, size = [], [], [], 0
     archive = output / "ParcelVerify-source.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
@@ -45,4 +46,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

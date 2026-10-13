@@ -1,15 +1,13 @@
 # Five-minute English demonstration
 
-**0:00–0:40 — Partner overview.** “ParcelVerify helps logistics operators verify supplier evidence before responding. This is synthetic data in an isolated workspace. The sample contains three partners and 60 shipments. We show unique affected shipments per 1,000, unresolved cases and evidence completeness. Small samples do not establish reliability.”
+**0:00–0:40 — Overview.** “This isolated demo helps operations staff check unusual shipment evidence and data access. These three counters use the same permitted cases. A flag means check the evidence; it does not prove wrongdoing.” Open PV-DEMO-001 directly from the queue.
 
-**0:40–1:20 — Shipment timeline.** Select `PV-DEMO-001`. “Dispatch records 2,000 g and seal SEAL-07. A later handoff records 1,850 g. The POD file matches another shipment. These are verification signals, not proof of responsibility.” Open the event payloads and photo metadata.
+**0:40–1:30 — Case evidence.** Open Evidence. “Before handover the recorded weight was 2.00 kg; later it was 1.85 kg. The difference is 150 g. Missing location and recipient approval remain unconfirmed.” Inspect the recorded journey, labeled demonstration photos, enlargement and Source records.
 
-**1:20–1:50 — Gate 1.** Select simulated partner SafeLog in Access Monitoring and query `PV-DEMO-001`. “The request is denied and logged before sensitive fields are returned. Approved bulk work cannot override shipment assignments.” Return to admin.
+**1:30–2:00 — AI availability.** Open AI summary. “The model can retrieve bounded read-only evidence and suggest a step. If it is unavailable, this message says so; we can still review the evidence and handle the case manually.” Run a live investigation only when the provider is configured and acceptance has resumed. Never substitute a canned result.
 
-**1:50–3:10 — Investigation.** Open the main case in AI Investigation and run it. “The live model selects bounded read-only tools. The trace shows retrieved source IDs. The report separates evidence, possible explanations, missing information and recommendations. It cannot execute an operational change or claim visual inspection.” If inference fails, show the saved incomplete run and state the actual error; do not substitute a canned report.
+**2:00–3:20 — Human response.** Request Confirm weight with a reason. Review the evidence, explicitly approve the request, then separately Apply approved step. “The request, approval and simulated execution are distinct persisted records. Approval alone does not change operations. Rejected requests cannot be applied.” Open Activity and download the readable case summary.
 
-**3:10–4:05 — Human response.** Propose `request_reweigh`, approve as simulated approver, then execute. “Approval and simulated state updates persist with the audit transaction. Repeated execution cannot apply the same change twice. Rejected requests cannot run.” Export the audit.
+**3:20–4:10 — Access and counter-evidence.** Back to Cases, filter Data access and open a denied request. “The access check stopped the request. We still need context before drawing conclusions.” Find PV-SHIP-011 and show its recorded approved packaging change and linked weight checks.
 
-**4:05–4:40 — Counter-evidence.** Open `PV-SHIP-011`. Show approved repackaging and its two linked measurements. “A supported explanation changes the interpretation of the weight difference. Other anomalies and missing evidence remain visible.”
-
-**4:40–5:00 — Isolation and limits.** Open another browser session. “Each visitor has a separate demo. Keep the recovery token private to resume yours while storage survives. Data expires after 24 hours of inactivity. A production system would add real authentication, durable hosted storage and operational integrations.”
+**4:10–5:00 — Permissions and workspace limits.** Settings > Demo tools contains identities and private recovery-token tools. Demonstrate a partner role and its permitted case cohort. “Roles and operations are simulated, not production authentication or carrier APIs. Data expires after 24 hours of inactivity or host storage loss. Keep recovery tokens private and export decisions before leaving.”

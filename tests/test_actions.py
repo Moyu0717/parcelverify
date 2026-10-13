@@ -90,6 +90,51 @@ def _create_case(db_path, shipment_id="PV-DEMO-001", event_id="E-TEST-001"):
 # ---------------------------------------------------------------------------
 
 class TestProposeAction:
+    def test_request_id_retries_return_persisted_state(self, seeded_db):
+        case = _create_case(seeded_db)
+        first = propose_action(seeded_db, case['case_id'], 'request_reweigh', INVESTIGATOR,
+                               request_id='draft-1', reason='Check weight')
+        assert first['is_new'] is True
+        review_action(seeded_db, first['action_id'], 'approve', APPROVER)
+        retry = propose_action(seeded_db, case['case_id'], 'request_reweigh', INVESTIGATOR,
+                               request_id='draft-1', reason='Check weight')
+        assert retry == dict(action_id='draft-1', status='approved', is_new=False)
+        with get_connection(seeded_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM action_requests WHERE action_id='draft-1'").fetchone()[0] == 1
+
+    @pytest.mark.parametrize('changed', [dict(reason='Different reason'), dict(target_id='Different target'),
+                                       dict(action_type='request_rephoto'), dict(actor_context=ADMIN)])
+    def test_request_id_mismatched_intent_rejected(self, seeded_db, changed):
+        case = _create_case(seeded_db)
+        intent = dict(db_path=seeded_db, case_id=case['case_id'], action_type='request_reweigh',
+                      actor_context=INVESTIGATOR, request_id='draft-2', reason='Check weight')
+        propose_action(**intent)
+        intent.update(changed)
+        with pytest.raises(IdempotencyError):
+            propose_action(**intent)
+
+    def test_request_id_duplicate_requires_authorized_role(self, seeded_db):
+        case = _create_case(seeded_db)
+        propose_action(seeded_db, case['case_id'], 'request_reweigh', INVESTIGATOR, request_id='draft-3')
+        with pytest.raises(AuthorizationError):
+            propose_action(seeded_db, case['case_id'], 'request_reweigh', PARTNER_USER, request_id='draft-3')
+
+    def test_concurrent_request_id_has_one_winner(self, seeded_db):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        case = _create_case(seeded_db)
+        barrier = Barrier(2)
+        def submit():
+            barrier.wait(timeout=5)
+            return propose_action(seeded_db, case['case_id'], 'request_reweigh', INVESTIGATOR,
+                                  request_id='draft-concurrent', reason='Check weight')
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(submit) for _ in range(2)]
+            results = [future.result(timeout=10) for future in futures]
+        assert sorted(result['is_new'] for result in results) == [False, True]
+        with get_connection(seeded_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM action_requests WHERE action_id='draft-concurrent'").fetchone()[0] == 1
+
     def test_creates_proposed_action(self, seeded_db):
         """propose_action creates a pending request."""
         case = _create_case(seeded_db)

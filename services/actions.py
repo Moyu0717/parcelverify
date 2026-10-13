@@ -49,7 +49,8 @@ def propose_action(
 ) -> dict:
     """Create a pending approval request. Does not execute.
 
-    Returns ``{"action_id": str, "status": "proposed"}``.
+    Optional ``request_id`` retries the same intent without duplicating it.
+    Returns action_id, persisted status, and is_new.
     """
     actor = _validate_actor(actor_context or {})
     conn = get_connection(db_path)
@@ -70,10 +71,23 @@ def propose_action(
             )
 
         ActionType(action_type)
-        action_id = str(uuid.uuid4())
+        request_id = kwargs.get("request_id")
+        if request_id is not None and (not isinstance(request_id, str) or not request_id.strip()):
+            raise ValueError("request_id must be a nonempty string")
+        action_id = request_id if request_id is not None else str(uuid.uuid4())
         target_id = kwargs.get("target_id", case[3] or "")  # shipment_id
         expires_at = kwargs.get("expires_at")
         reason = kwargs.get("reason", "")
+
+        if request_id is not None:
+            existing = conn.execute(
+                "SELECT case_id,action_type,target_id,requested_by,reason,status FROM action_requests WHERE action_id=?",
+                (request_id,),
+            ).fetchone()
+            if existing:
+                if existing[:5] != (case_id, action_type, target_id, actor.actor_id, reason):
+                    raise IdempotencyError("request_id is already used for a different action intent")
+                return {"action_id": action_id, "status": existing[5], "is_new": False}
 
         conn.execute(
             """INSERT INTO action_requests
@@ -87,7 +101,7 @@ def propose_action(
         )
         conn.commit()
 
-        return {"action_id": action_id, "status": ActionStatus.PROPOSED.value}
+        return {"action_id": action_id, "status": ActionStatus.PROPOSED.value, "is_new": True}
     finally:
         conn.close()
 

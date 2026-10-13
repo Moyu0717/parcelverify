@@ -76,16 +76,28 @@ def test_all_live_pages_and_partner_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "DATA_ROOT", tmp_path)
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
     assert not app.exception
-    for page in ("Shipment Timeline", "Access Monitoring", "Handoff Verification", "AI Investigation", "Approvals & Audit"):
+    assert app.sidebar.radio[0].options == ['Overview', 'Cases', 'Partners']
+    for page in ('Cases', 'Partners', 'Overview'):
         app.sidebar.radio[0].set_value(page).run()
         assert not app.exception
         assert not app.error
-    app.sidebar.selectbox[0].set_value("partner_user").run()
-    app.sidebar.radio[0].set_value("Shipment Timeline").run()
+    next(button for button in app.sidebar.button if button.label == 'Settings').click().run()
+    app.selectbox(key='role_widget').set_value('partner_user').run()
+    assert app.session_state.actor_context['role'] == 'partner_user'
+    app.sidebar.radio[0].set_value('Cases').run()
     assert not app.exception
-    ids = app.selectbox[0].options
-    assert len(ids) == 20
-    app.sidebar.radio[0].set_value("AI Investigation").run()
+    assert app.session_state.actor_role == 'partner_user'
+    from contracts import ActorContext
+    from services.access import _is_authorized
+    from services.review import list_review_cases
+    path, actor = app.session_state.db_path, app.session_state.actor_context
+    cohort = list_review_cases(path, actor)
+    assert cohort
+    with get_connection(path) as conn:
+        assert all(c['partner_id'] == 'P-QUICKRUN' and _is_authorized(conn, ActorContext(**actor), c['shipment_id'], datetime.now(timezone.utc).isoformat())[0] for c in cohort)
+    app.sidebar.radio[0].set_value('Partners').run()
     assert not app.exception
-    assert not app.dataframe
-    assert any("internal reviewers" in item.value for item in app.info)
+    assert app.session_state.actor_context['role'] == 'partner_user'
+    assert [button.key for button in app.button if (button.key or '').startswith('partner-')] == ['partner-P-QUICKRUN']
+    next(button for button in app.sidebar.button if button.label == 'Settings').click().run()
+    assert app.selectbox(key='role_widget').value == 'partner_user'

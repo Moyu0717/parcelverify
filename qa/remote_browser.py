@@ -50,9 +50,12 @@ def main():
                         network["websocket_messages"][kind] = network["websocket_messages"].get(kind, 0) + 1
                         if kind == "delta" and message.delta.HasField("new_element"):
                             element = message.delta.new_element
-                            if element.WhichOneof("type") == "arrow_data_frame":
+                            if element.WhichOneof("type") in ("arrow_data_frame", "dataframe"):
                                 import pyarrow as arrow
-                                records = arrow.ipc.open_stream(element.arrow_data_frame.data).read_all().to_pylist()
+                                table = getattr(element, element.WhichOneof("type"))
+                                if hasattr(table, "arrow_data"):
+                                    table = table.arrow_data
+                                records = arrow.ipc.open_stream(table.data).read_all().to_pylist()
                                 for record in records:
                                     if record.get("error"):
                                         evidence.setdefault("run_diagnostics", []).append({key: record.get(key) for key in ("run_id", "status", "model_name", "error")})
@@ -166,4 +169,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

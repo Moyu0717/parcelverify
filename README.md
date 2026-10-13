@@ -6,7 +6,7 @@ An English logistics investigation prototype for monitoring external partners an
 
 Use Python 3.11. Install `requirements.txt`, then run `python start.py`. On this checkout, use `.venv\Scripts\python.exe start.py`. Open `http://localhost:8501`.
 
-Pages cover partner metrics, shipment source evidence and images, access monitoring, handoff comparison and submission, real model investigation, human approval, simulated execution and JSON exports. No mock AI reports appear in the product.
+Three destinations cover the review loop: Overview, Cases and Partners. Open a case once, read its Summary and Evidence, then request a next step, approve or reject it, and apply an approved step separately. Evidence comparisons, actual source records, demonstration photos, access reviews and readable case downloads stay together. Settings contains demo roles and recovery tools. AI failure is explicit; evidence and authorized manual processing remain available. No mock AI reports appear in the product.
 
 ## Configure Gemini securely
 
@@ -29,7 +29,7 @@ python -m pytest -q
 python qa/real_ai_acceptance.py
 ```
 
-The first command uses temporary databases and deterministic provider mocks. The second makes actual model requests using environment variables and fails honestly if inference is unavailable. It exercises the main exception, supported repackaging and insufficient evidence. It does not automatically read Streamlit Secrets; use the application's investigation page for secret-configured hosting.
+The first command uses temporary databases and deterministic provider mocks. The second makes actual model requests using environment variables and fails honestly if inference is unavailable. It exercises the main exception, supported repackaging and insufficient evidence. It does not automatically read Streamlit Secrets; use Cases > AI summary for secret-configured hosting. Real Gemini and final HTTPS acceptance remain pending; local UI acceptance never substitutes for them.
 
 Each browser receives a separate synthetic dataset. Save the private recovery token to reopen the same workspace after refresh or application restart while disk data survives. Start a new demo creates a new workspace. Data expires after 24 hours of inactivity; Community Cloud storage may disappear on host restart/redeployment. Export reports and audits before leaving. Role selection illustrates permissions and is not production authentication.
 
