@@ -124,13 +124,13 @@ def get_partner_metrics(db_path: str = "data/parcelverify.db", partner_id: str =
         affected, complete = set(), set()
         open_cases = 0
         for shipment_id in ids:
-            cases = conn.execute("SELECT status, findings_json, created_at FROM case_records WHERE shipment_id = ?", (shipment_id,)).fetchall()
-            for status, findings, created in cases:
+            cases = conn.execute("SELECT status, findings_json, created_at, EXISTS(SELECT 1 FROM evidence_tasks t WHERE t.case_id=c.case_id AND t.status='open') FROM case_records c WHERE shipment_id = ?", (shipment_id,)).fetchall()
+            for status, findings, created, has_open_task in cases:
                 if not _in_period(created, period_start, period_end):
                     continue
                 if json.loads(findings or "[]"):
                     affected.add(shipment_id)
-                if status not in ("closed", "review_completed"):
+                if status not in ("closed", "review_completed") or has_open_task:
                     open_cases += 1
             logs = conn.execute("SELECT occurred_at FROM access_logs WHERE shipment_id = ? AND outcome = 'denied'", (shipment_id,)).fetchall()
             if any(_in_period(row[0], period_start, period_end) for row in logs):

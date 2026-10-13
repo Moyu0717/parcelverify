@@ -275,18 +275,33 @@ def execute_action(
         }
 
         try:
-            # Execute the action (simulate business state change)
-            # Update case status based on action type
-            if action_type in (ActionType.HOLD_HANDOFF.value, ActionType.HOLD_POD.value,
-                              ActionType.PAUSE_HIGH_VALUE_ASSIGNMENT.value,
-                              ActionType.RESTRICT_ACCOUNT.value):
-                new_case_status = CaseStatus.ACTION_EXECUTED.value
-            elif action_type in (ActionType.REQUEST_REWEIGH.value,
-                                 ActionType.REQUEST_REPHOTO.value,
-                                 ActionType.REQUEST_RESCAN.value):
-                new_case_status = CaseStatus.ACTION_EXECUTED.value
-            else:
-                new_case_status = CaseStatus.ACTION_EXECUTED.value
+            new_case_status = CaseStatus.ACTION_EXECUTED.value
+            task_types = {
+                ActionType.REQUEST_REWEIGH.value: EvidenceTaskType.REWEIGH.value,
+                ActionType.REQUEST_REPHOTO.value: EvidenceTaskType.REPHOTO.value,
+                ActionType.REQUEST_RESCAN.value: EvidenceTaskType.RESCAN.value,
+            }
+            task_id = None
+            if action_type in task_types:
+                task_type = task_types[action_type]
+                conn.execute(
+                    """INSERT OR IGNORE INTO evidence_tasks
+                       (task_id, case_id, task_type, description, status, created_by, created_at)
+                       VALUES (?, ?, ?, ?, 'open', ?, ?)""",
+                    (str(uuid.uuid4()), case_id, task_type, reason, actor.actor_id, now),
+                )
+                task_id = conn.execute(
+                    "SELECT task_id FROM evidence_tasks WHERE case_id = ? AND task_type = ? AND status = 'open'",
+                    (case_id, task_type),
+                ).fetchone()[0]
+            shipment_status = None
+            if action_type in (ActionType.HOLD_HANDOFF.value, ActionType.HOLD_POD.value):
+                shipment = conn.execute("SELECT status FROM shipments WHERE shipment_id = ?", (target_id,)).fetchone()
+                if not shipment:
+                    raise ValueError(f"Target shipment {target_id} not found")
+                before["shipment_status"] = shipment[0]
+                shipment_status = f"simulated_{action_type}"
+                conn.execute("UPDATE shipments SET status = ? WHERE shipment_id = ?", (shipment_status, target_id))
 
             conn.execute(
                 "UPDATE case_records SET status = ?, updated_at = ? WHERE case_id = ?",
@@ -298,6 +313,12 @@ def execute_action(
                 "target_id": target_id,
                 "action_type": action_type,
             }
+
+            if task_id is not None:
+                after["evidence_task_id"] = task_id
+                after["evidence_task_type"] = task_types[action_type]
+            if shipment_status is not None:
+                after["shipment_status"] = shipment_status
 
             # Update action status
             conn.execute(
@@ -316,6 +337,8 @@ def execute_action(
                     "action_id": action_id,
                     "action_type": action_type,
                     "target_id": target_id,
+                    "before": before,
+                    "after": after,
                 },
                 tx=conn,
             )

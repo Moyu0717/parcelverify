@@ -9,9 +9,9 @@ Updated: 13 October 2026. Current executed state supersedes the old planning boa
 | P2-B | Gate 1, Gate 2, metrics, actions and audit repairs | Rules subagent | Done | 70 targeted tests passed |
 | P2-C | Bounded real-provider adapter, tools, validation and run traces | Investigation subagent | Implemented | 34 mocked/provider tests passed; real key pending |
 | P3 | English live pages and isolated visitor workspaces | Main | Done | All six pages tested |
-| P4-local | Full and final local acceptance | Main | Passed | 134 full tests + 30 final changed-path tests |
+| P4-local | Full and final local acceptance | Main | Passed | 156 final full tests; actual portable HTTP launch passed |
 | P4-ai | Three actual Gemini case investigations | Main/user setup | Blocked | Secure GEMINI_API_KEY configuration required |
-| P5-source | Allowlisted source package and public GitHub publication | Main | In progress | Moyu0717/parcelverify starter verified |
+| P5-source | Allowlisted source package and public GitHub publication | Main | Published | Initial release 8801763; this source contains validated final repairs |
 | P5-live | HTTPS Community Cloud deployment | User setup/Main | Blocked | Select repo/main/app.py and configure Secrets |
 | P5-remote | Independent browser interaction and hosted real AI | Main/reviewer | Not run | Requires live URL and working Gemini key |
 

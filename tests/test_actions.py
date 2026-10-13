@@ -299,3 +299,74 @@ class TestExportAudit:
         """Non-admin cannot export full audit trail."""
         with pytest.raises(AuthorizationError):
             export_audit(seeded_db, None, PARTNER_USER)
+
+
+@pytest.mark.parametrize("action_type, task_type", [("request_reweigh", "reweigh"), ("request_rephoto", "rephoto"), ("request_rescan", "rescan")])
+def test_executed_request_creates_verification_task(seeded_db, action_type, task_type):
+    case = _create_case(seeded_db)
+    action = propose_action(seeded_db, case["case_id"], action_type, INVESTIGATOR, reason="Verify linked measurements")
+    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    result = execute_action(seeded_db, action["action_id"], ADMIN)
+    assert result["status"] == "executed"
+    conn = get_connection(seeded_db)
+    try:
+        rows = conn.execute("SELECT task_id, description, created_by FROM evidence_tasks WHERE case_id = ? AND task_type = ? AND status = 'open'", (case["case_id"], task_type)).fetchall()
+        assert len(rows) == 1
+        assert rows[0] == (result["after"]["evidence_task_id"], "Verify linked measurements", ADMIN["actor_id"])
+    finally:
+        conn.close()
+    assert execute_action(seeded_db, action["action_id"], ADMIN)["status"] == "already_executed"
+
+@pytest.mark.parametrize("action_type", ["hold_handoff", "hold_pod"])
+def test_executed_hold_persists_audited_shipment_state(seeded_db, action_type):
+    case = _create_case(seeded_db)
+    action = propose_action(seeded_db, case["case_id"], action_type, INVESTIGATOR)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    result = execute_action(seeded_db, action["action_id"], ADMIN)
+    assert result["status"] == "executed"
+    assert result["after"]["shipment_status"] == f"simulated_{action_type}"
+    conn = get_connection(seeded_db)
+    try:
+        assert conn.execute("SELECT status FROM shipments WHERE shipment_id = 'PV-DEMO-001'").fetchone()[0] == result["after"]["shipment_status"]
+        details = json.loads(conn.execute("SELECT details_json FROM audit_log WHERE case_id = ? AND operation = 'action_executed'", (case["case_id"],)).fetchone()[0])
+        assert details["before"]["shipment_status"] == result["before"]["shipment_status"]
+        assert details["after"]["shipment_status"] == f"simulated_{action_type}"
+    finally:
+        conn.close()
+
+@pytest.mark.parametrize("action_type", ["request_reweigh", "request_rephoto", "request_rescan", "hold_handoff", "hold_pod"])
+def test_failed_execution_audit_rolls_back_tasks_and_shipments(seeded_db, monkeypatch, action_type):
+    case = _create_case(seeded_db)
+    action = propose_action(seeded_db, case["case_id"], action_type, INVESTIGATOR)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    conn = get_connection(seeded_db)
+    try:
+        before = conn.execute("SELECT status FROM shipments WHERE shipment_id = 'PV-DEMO-001'").fetchone()[0]
+    finally:
+        conn.close()
+    def fail(*args, **kwargs):
+        raise AuditError("Injected execution audit failure")
+    monkeypatch.setattr("services.actions.append_audit", fail)
+    assert execute_action(seeded_db, action["action_id"], ADMIN)["status"] == "failed"
+    conn = get_connection(seeded_db)
+    try:
+        assert conn.execute("SELECT status FROM shipments WHERE shipment_id = 'PV-DEMO-001'").fetchone()[0] == before
+        assert not conn.execute("SELECT task_id FROM evidence_tasks WHERE case_id = ?", (case["case_id"],)).fetchall()
+        assert conn.execute("SELECT status FROM case_records WHERE case_id = ?", (case["case_id"],)).fetchone()[0] != "action_executed"
+        assert not conn.execute("SELECT 1 FROM audit_log WHERE case_id = ? AND operation = 'action_executed'", (case["case_id"],)).fetchall()
+    finally:
+        conn.close()
+
+
+def test_executed_request_reuses_existing_open_task(seeded_db):
+    case = _create_case(seeded_db)
+    task = create_evidence_task(seeded_db, case["case_id"], "reweigh", INVESTIGATOR, "Earlier verification request")
+    action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    result = execute_action(seeded_db, action["action_id"], ADMIN)
+    assert result["after"]["evidence_task_id"] == task["task_id"]
+    conn = get_connection(seeded_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_tasks WHERE case_id = ? AND task_type = 'reweigh' AND status = 'open'", (case["case_id"],)).fetchone()[0] == 1
+    finally:
+        conn.close()

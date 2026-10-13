@@ -239,3 +239,33 @@ class TestInvestigateCase:
         assert result["status"] == "completed"
         assert len(result["tool_calls"]) == 4
         assert provider.calls == [False]*4+[True]
+
+@pytest.mark.parametrize("verdict",["needs_review","insufficient_evidence","consistent"])
+def test_report_preserves_review_need(seeded_db,verdict):
+    case = _create_case_for_investigation(seeded_db)
+    report = valid_report()
+    report["verdict"] = verdict
+    provider = ScriptedProvider([{"done":True},report])
+    result = investigate_case(seeded_db,case["case_id"],ADMIN_ACTOR,provider=provider)
+    assert result["status"] == "completed"
+    with get_connection(seeded_db) as conn:
+        status = conn.execute("SELECT status FROM case_records WHERE case_id=?",(case["case_id"],)).fetchone()[0]
+    assert status == ("review_completed" if verdict == "consistent" else "pending_review")
+
+
+@pytest.mark.parametrize("case_status",["action_approved","action_executed","action_rejected","closed"])
+@pytest.mark.parametrize("fails",[False,True])
+def test_investigation_preserves_operational_case_state(seeded_db,case_status,fails):
+    case = _create_case_for_investigation(seeded_db)
+    with get_connection(seeded_db) as conn:
+        conn.execute("UPDATE case_records SET status=? WHERE case_id=?",(case_status,case["case_id"]))
+    class StateCheckingProvider(ScriptedProvider):
+        def generate(self,*args,**kwargs):
+            with get_connection(seeded_db) as conn:
+                assert conn.execute("SELECT status FROM case_records WHERE case_id=?",(case["case_id"],)).fetchone()[0] == case_status
+            return super().generate(*args,**kwargs)
+    provider = StateCheckingProvider([ValueError("model failed")] if fails else [{"done":True},valid_report()])
+    result = investigate_case(seeded_db,case["case_id"],ADMIN_ACTOR,provider=provider)
+    assert result["status"] == ("error" if fails else "completed")
+    with get_connection(seeded_db) as conn:
+        assert conn.execute("SELECT status FROM case_records WHERE case_id=?",(case["case_id"],)).fetchone()[0] == case_status

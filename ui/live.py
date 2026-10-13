@@ -79,6 +79,7 @@ def partner_overview():
     if actor["role"] == "partner_user":
         partners = [p for p in partners if p["partner_id"] == actor["partner_id"]]
     st.write("Monitor partners using shipment volume and evidence quality over the same reporting period.")
+    st.caption("Evidence completeness measures handoff/POD event presence; unknown measurements and photos still require verification.")
     for partner in partners:
         metrics = get_partner_metrics(path, partner["partner_id"])
         with st.container(border=True):
@@ -89,8 +90,10 @@ def partner_overview():
             cols[2].metric("Unresolved cases", metrics["open_cases"])
             cols[3].metric("Evidence completeness", f"{metrics['evidence_completeness_rate']:.1%}")
             st.caption(f"Unique affected shipments: {metrics['anomaly_count']}. Display threshold met: {metrics['meets_display_threshold']}. Sample size does not establish statistical reliability.")
-            if "period_start" in metrics:
-                st.caption(f"Period: {metrics['period_start']} to {metrics.get('period_end', 'present')}")
+            if metrics.get("period_start"):
+                st.caption(f"Period: {metrics['period_start']} to {metrics.get('period_end') or 'present'}")
+            else:
+                st.caption("Reporting period: all recorded synthetic history.")
     st.subheader("Review queue")
     st.dataframe(cases(), use_container_width=True, hide_index=True)
 
@@ -183,6 +186,10 @@ def handoff_verification():
 
 
 def investigation():
+    _, current_actor = context()
+    if current_actor["role"] == "partner_user":
+        st.info("Investigation reports and internal tool traces are available to internal reviewers.")
+        return
     case = select_case()
     if not case:
         return

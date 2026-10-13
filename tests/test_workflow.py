@@ -11,6 +11,7 @@ from db import get_connection, init_db, submit_event, upload_photo
 from seed import seed_demo
 from services.actions import propose_action, review_action, execute_action
 from services.workflow import initialize_reviews, submit_handoff, process_evidence
+from services.risk import get_partner_metrics
 
 ADMIN = {"actor_id": "ADMIN-001", "role": "admin", "session_id": "acceptance"}
 
@@ -44,6 +45,10 @@ def test_workflow_persists_and_duplicate_submission_no_duplicate_case(database):
     review_action(database, action["action_id"], "approve", ADMIN)
     assert execute_action(database, action["action_id"], ADMIN)["status"] == "executed"
     assert execute_action(database, action["action_id"], ADMIN)["status"] == "already_executed"
+    with get_connection(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_tasks WHERE case_id=? AND task_type='reweigh' AND status='open'", (first["case"]["case_id"],)).fetchone()[0] == 1
+        conn.execute("UPDATE case_records SET status='review_completed' WHERE case_id=?", (first["case"]["case_id"],))
+    assert get_partner_metrics(database, "P-QUICKRUN")["open_cases"] >= 1
 
 def test_duplicate_evidence_cannot_bypass_authorization(database):
     with get_connection(database) as conn:
@@ -80,3 +85,7 @@ def test_all_live_pages_and_partner_scope(tmp_path, monkeypatch):
     assert not app.exception
     ids = app.selectbox[0].options
     assert len(ids) == 20
+    app.sidebar.radio[0].set_value("AI Investigation").run()
+    assert not app.exception
+    assert not app.dataframe
+    assert any("internal reviewers" in item.value for item in app.info)

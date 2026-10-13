@@ -1,5 +1,11 @@
 # ParcelVerify — Progress Log
 
+## 13 October 2026 — Codex continuation and release preparation
+
+Retained existing Python/Streamlit/SQLite code and twelve permitted image fixtures. Two bounded GPT-6.1 Sol subagents repaired rules/actions and the bounded investigation adapter; main integrated English live pages, isolated recovery-token workspaces, migrations, deployment packaging and acceptance tests. Real model selection is configurable; the user selected Gemini Developer API and Community Cloud.
+
+Final local suite: 156 passed in 91.81 seconds. Portable launcher HTTP health passed. Public GitHub source at `Moyu0717/parcelverify` was published and verified (initial release 8801763); final response-state/task repairs are included in this source. Real Gemini inference, the HTTPS deployment and independent remote acceptance remain blocked pending the user's secure Secrets configuration and Community Cloud deployment URL. No successful real inference or online completion is claimed.
+
 **Owner:** Main Agent  
 **Format:** Append-only, newest first.
 
