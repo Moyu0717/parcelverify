@@ -1,5 +1,6 @@
 """English pages backed by scoped evidence, rules, investigations and actions."""
 import json
+import base64
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,17 @@ from services.workflow import process_evidence, submit_handoff
 
 def context():
     return st.session_state.db_path, st.session_state.actor_context
+
+
+def display_photo(path):
+    """Inline validated evidence bytes so hosted iframe media routes cannot break images."""
+    file = Path(path)
+    if not file.exists():
+        st.info("Photo file unavailable.")
+        return
+    mime = "image/png" if file.suffix.lower() == ".png" else "image/jpeg"
+    encoded = base64.b64encode(file.read_bytes()).decode("ascii")
+    st.html(f'<img src="data:{mime};base64,{encoded}" alt="Submitted shipment evidence" style="width:280px;max-width:100%;height:auto;border-radius:8px">')
 
 
 def rows(sql, params=()):
@@ -108,7 +120,7 @@ def shipment_timeline():
             st.json(json.loads(event["payload_json"]))
             for photo in rows("SELECT photo_id, local_path, sha256, phash, manual_observation FROM photos WHERE event_id=?", (event["event_id"],)):
                 if Path(photo["local_path"]).exists():
-                    st.image(photo["local_path"], width=280)
+                    display_photo(photo["local_path"])
                 st.caption(f"{photo['photo_id']} · SHA-256 {photo['sha256']} · pHash {photo['phash']}")
                 st.caption(photo["manual_observation"] or "No manual observation supplied.")
 
@@ -151,7 +163,7 @@ def handoff_verification():
     for photo in rows("SELECT p.photo_id, p.local_path FROM photos p JOIN events e ON p.event_id=e.event_id WHERE e.shipment_id=?", (sid,)):
         with st.expander(f"Photo evidence · {photo['photo_id']}"):
             if Path(photo["local_path"]).exists():
-                st.image(photo["local_path"], width=280)
+                display_photo(photo["local_path"])
             st.json(inspect_photo(path, photo["photo_id"], actor))
             st.caption("Exact hashes establish file reuse. Perceptual hashes indicate similarity candidates. Neither establishes intent or package contents.")
     if actor["role"] == "approver":
@@ -209,8 +221,12 @@ def investigation():
     st.subheader("Saved runs")
     runs = rows("SELECT run_id, status, model_name, error, started_at, finished_at FROM investigation_runs WHERE case_id=? ORDER BY started_at DESC", (case["case_id"],))
     st.dataframe(runs, hide_index=True, use_container_width=True)
+    if runs and runs[0].get("error"):
+        st.caption("Latest run diagnostic: " + runs[0]["error"])
     st.subheader("Tool execution trace")
-    st.dataframe(rows("SELECT run_id, tool_name, parameters_json, result_summary, evidence_ids_json, duration_ms FROM tool_executions WHERE case_id=? ORDER BY created_at", (case["case_id"],)), hide_index=True, use_container_width=True)
+    trace = rows("SELECT run_id, tool_name, parameters_json, result_summary, evidence_ids_json, duration_ms FROM tool_executions WHERE case_id=? ORDER BY created_at", (case["case_id"],))
+    st.dataframe(trace, hide_index=True, use_container_width=True)
+    st.download_button("Export investigation trace", json.dumps({"runs": runs, "tools": trace}, indent=2), file_name="parcelverify-trace.json", mime="application/json")
     reports = rows("SELECT report_json, model_name, version FROM report_versions WHERE case_id=? ORDER BY version DESC", (case["case_id"],))
     if not reports:
         st.info("No completed AI report. Configure a running model through server secrets to investigate.")
@@ -258,3 +274,4 @@ def approvals():
 PAGES = {"Partner Overview": partner_overview, "Shipment Timeline": shipment_timeline,
          "Access Monitoring": access_monitoring, "Handoff Verification": handoff_verification,
          "AI Investigation": investigation, "Approvals & Audit": approvals}
+

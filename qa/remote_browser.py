@@ -48,6 +48,14 @@ def main():
                         message.ParseFromString(payload)
                         kind = message.WhichOneof("type") or "unknown"
                         network["websocket_messages"][kind] = network["websocket_messages"].get(kind, 0) + 1
+                        if kind == "delta" and message.delta.HasField("new_element"):
+                            element = message.delta.new_element
+                            if element.WhichOneof("type") == "arrow_data_frame":
+                                import pyarrow as arrow
+                                records = arrow.ipc.open_stream(element.arrow_data_frame.data).read_all().to_pylist()
+                                for record in records:
+                                    if record.get("error"):
+                                        evidence.setdefault("run_diagnostics", []).append({key: record.get(key) for key in ("run_id", "status", "model_name", "error")})
                     except Exception:
                         network["websocket_messages"]["unparsed"] = network["websocket_messages"].get("unparsed", 0) + 1
                 socket.on("framereceived", inspect_message)
@@ -56,6 +64,10 @@ def main():
             if args.diagnose:
                 page.wait_for_timeout(5000)
                 network["frames"] = [frame.url for frame in page.frames]
+                evidence["frame_content"] = []
+                for frame in page.frames:
+                    if frame.url.startswith(args.url.rstrip("/")):
+                        evidence["frame_content"].append({"url": frame.url, "headings": frame.get_by_role("heading").all_text_contents(), "body": frame.locator("body").inner_text(timeout=5000)[:6000]})
                 evidence.update(http_status=response.status if response else None, title=page.title(), page_url=page.url)
                 body = page.locator("body").inner_text(timeout=5000)
                 evidence["body_excerpt"] = re.sub(r"AIza[\w-]+", "[redacted]", body[:12000])
@@ -64,9 +76,20 @@ def main():
                 evidence["status"] = "diagnostic_only"
                 browser.close()
                 return 1
+            browser_page = page
+            app_frame = None
+            for _ in range(30):
+                app_frame = page.frame(url=re.compile(r"/~/\+/"))
+                if app_frame:
+                    break
+                page.wait_for_timeout(500)
+            network["frames"] = [frame.url for frame in page.frames]
+            if app_frame:
+                browser_page.goto(app_frame.url, wait_until="domcontentloaded", timeout=60000)
+                page = browser_page
             page.get_by_role("heading", name="Partner Overview", exact=True).wait_for(timeout=args.ready_timeout)
-            page.screenshot(path=str(ARTIFACTS / "remote-overview.png"), full_page=True)
-            evidence.update(http_status=response.status if response else None, title=page.title())
+            browser_page.screenshot(path=str(ARTIFACTS / "remote-overview.png"), full_page=True)
+            evidence.update(http_status=response.status if response else None, title=browser_page.title())
             evidence["checks"].append({"name": "independent_https_page", "status": "passed"})
             if not args.acceptance:
                 evidence["body_excerpt"] = page.locator("body").inner_text()[:5000]
@@ -83,9 +106,15 @@ def main():
                     success = page.get_by_text("Real model investigation saved.", exact=True)
                     failure = page.get_by_text(re.compile("Investigation incomplete:"))
                     success.or_(failure).wait_for(timeout=150000)
+                    trace_button = page.get_by_role("button", name="Export investigation trace", exact=True)
+                    if trace_button.count():
+                        with browser_page.expect_download() as trace_download:
+                            trace_button.click()
+                        trace_download.value.save_as(ARTIFACTS / f"remote-{label}-trace.json")
                     if failure.count():
+                        evidence["body_excerpt"] = page.locator("body").inner_text()[:10000]
                         raise AssertionError(f"{label}: {failure.inner_text()}")
-                    with page.expect_download() as download:
+                    with browser_page.expect_download() as download:
                         page.get_by_role("button", name="Export English report", exact=True).click()
                     destination = ARTIFACTS / f"remote-{label}.json"
                     download.value.save_as(destination)
@@ -99,6 +128,14 @@ def main():
                 second = browser.new_context(viewport={"width": 1440, "height": 1080})
                 second_page = second.new_page()
                 second_page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
+                second_frame = None
+                for _ in range(30):
+                    second_frame = second_page.frame(url=re.compile(r"/~/\+/"))
+                    if second_frame:
+                        break
+                    second_page.wait_for_timeout(500)
+                if second_frame:
+                    second_page.goto(second_frame.url, wait_until="domcontentloaded", timeout=60000)
                 second_page.get_by_role("heading", name="Partner Overview", exact=True).wait_for(timeout=60000)
                 navigate(second_page, "AI Investigation")
                 assert second_page.get_by_text("No completed AI report.", exact=False).count() == 1
