@@ -29,3 +29,11 @@ def test_current_demo_is_separate_and_recoverable(tmp_path, monkeypatch):
     assert old != new
     assert dataset_version(new) == DATASET_VERSION
     assert workspace.open_workspace(token)[1] == old
+
+def test_provider_error_does_not_expose_response_contents():
+    import httpx
+    from agent.runner import _provider_error
+    response = httpx.Response(403, json={'error':{'message':'Your API key was reported as leaked: secret-value','status':'PERMISSION_DENIED'}})
+    assert _provider_error(response) == 'AI provider returned HTTP 403 (API_KEY_REPORTED_LEAKED)'
+    response = httpx.Response(403, json={'error':{'message':'secret-value','details':[{'reason':'secret-value'}]}})
+    assert _provider_error(response) == 'AI provider returned HTTP 403'

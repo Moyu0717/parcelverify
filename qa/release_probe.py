@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-OUT = Path(__file__).parent / 'artifacts' / 'deployment'
+OUT = Path(__file__).parent / 'artifacts' / ('local-release' if sys.argv[1].startswith('http://localhost') else 'deployment')
 OUT.mkdir(parents=True, exist_ok=True)
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path='C:/Program Files/Google/Chrome/Application/chrome.exe', headless=True)
-    page = browser.new_page(viewport={'width':1440,'height':1000})
+    page = browser.new_page(viewport={'width':390 if '--mobile' in sys.argv else 1440,'height':1000})
     response = page.goto(sys.argv[1], wait_until='domcontentloaded', timeout=60000)
     for _ in range(40):
         frame = page.frame(url=re.compile(r'/~/\+/'))

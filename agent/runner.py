@@ -32,6 +32,23 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _provider_error(response):
+    """Expose only recognized provider error categories, never raw response text."""
+    reason = ''
+    try:
+        error = response.json().get('error', {})
+        allowed = {'API_KEY_INVALID','API_KEY_SERVICE_BLOCKED','API_KEY_HTTP_REFERRER_BLOCKED','API_KEY_IP_ADDRESS_BLOCKED','SERVICE_DISABLED','PERMISSION_DENIED','RESOURCE_EXHAUSTED','NOT_FOUND','UNAUTHENTICATED'}
+        for detail in error.get('details', []):
+            if detail.get('reason') in allowed: reason = detail['reason']; break
+        message = str(error.get('message', '')).lower()
+        if 'reported as leaked' in message: reason = 'API_KEY_REPORTED_LEAKED'
+        elif 'location is not supported' in message: reason = 'LOCATION_UNSUPPORTED'
+        elif not reason and error.get('status') in allowed: reason = error['status']
+    except (ValueError, AttributeError, TypeError):
+        pass
+    return f"AI provider returned HTTP {response.status_code}" + (f" ({reason})" if reason else '')
+
+
 class ModelProvider:
     def __init__(self):
         self.kind = os.getenv("PV_AI_PROVIDER", "ollama").lower()
@@ -208,7 +225,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             result["status"] = "ai_not_running"
             error = "AI provider is unreachable"
         elif isinstance(exc, httpx.HTTPStatusError):
-            error = f"AI provider returned HTTP {exc.response.status_code}"
+            error = _provider_error(exc.response)
         else:
             error = _safe_error(exc)
         if conn and run_id:

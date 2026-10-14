@@ -17,7 +17,7 @@ def build_information():
         paths.extend((ROOT / folder).glob('*.css'))
     for path in sorted(paths):
         digest.update(path.relative_to(ROOT).as_posix().encode())
-        digest.update(path.read_bytes().replace(b'\r\n', b'\n'))
+        digest.update(path.read_bytes().replace(b'\r\n', b'\n').rstrip(b'\n') + b'\n')
     commit = 'Unavailable'
     if (ROOT / '.git').exists():
         try:
