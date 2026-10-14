@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 from services.review import ensure_access_cases
+from services.cases import ensure_case_links
 from workspace import open_workspace, prune_expired_workspaces
 from ui.presentation import apply_theme
 from ui.workspace_ui import route, search, notice
@@ -91,11 +92,17 @@ def main():
             token,path=open_workspace()
             st.session_state.workspace_token,st.session_state.db_path=token,path
     Path(st.session_state.db_path).parent.joinpath(".activity").touch()
+    if st.session_state.get('schema_revision')!='case-workflow-v1':
+        from db import init_db
+        init_db(st.session_state.db_path)
+        st.session_state.schema_revision='case-workflow-v1'
     role=st.session_state.setdefault("actor_role","admin")
     partner=st.session_state.setdefault("actor_partner","P-QUICKRUN") if role=="partner_user" else None
     actor_id={"P-QUICKRUN":"ACTOR-QR-01","P-SAFELOG":"ACTOR-SL-01","P-METROLINE":"ACTOR-ML-01"}.get(partner,f"{role.upper()}-001")
     st.session_state.actor_context={"actor_id":actor_id,"partner_id":partner,"role":role,"session_id":st.session_state.workspace_token,"is_simulated":True}
-    if role in ("admin","investigator"): ensure_access_cases(st.session_state.db_path,st.session_state.actor_context)
+    if role in ("admin","investigator"):
+        ensure_access_cases(st.session_state.db_path,st.session_state.actor_context)
+        ensure_case_links(st.session_state.db_path,st.session_state.actor_context)
     if st.session_state.pop("search_requested",False): search(st.session_state.get("workspace_search",""))
     pending=st.session_state.pop("route_pending",None)
     if pending: st.session_state.primary_destination=pending

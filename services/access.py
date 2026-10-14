@@ -197,7 +197,7 @@ def query_shipment(
                     shipment_id, occurred_at, action, outcome,
                     returned_fields, batch_job_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (log_id, partner_id, actor.actor_id,
+                (log_id, actor.partner_id, actor.actor_id,
                  f"ROLE-{actor.role}:CREDS-{actor.actor_id}", shipment_id,
                  check_time, "query_shipment", "denied",
                  json.dumps([]), None),
@@ -222,6 +222,8 @@ def query_shipment(
             "status": ship_row[7],
             "reference_event_id": ship_row[8],
         }
+        if actor.role=='partner_user':
+            fields={k:v for k,v in fields.items() if k in ('shipment_id','partner_id','expected_count','expected_weight_g','expected_seal','status')}
 
         conn.execute(
             """INSERT INTO access_logs
@@ -229,7 +231,7 @@ def query_shipment(
                 shipment_id, occurred_at, action, outcome,
                 returned_fields, batch_job_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (log_id, partner_id, actor.actor_id,
+                (log_id, actor.partner_id, actor.actor_id,
              f"ROLE-{actor.role}:CREDS-{actor.actor_id}", shipment_id,
              check_time, "query_shipment", "authorized",
              json.dumps(list(fields.keys())), None),

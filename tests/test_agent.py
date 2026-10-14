@@ -250,7 +250,7 @@ def test_report_preserves_review_need(seeded_db,verdict):
     assert result["status"] == "completed"
     with get_connection(seeded_db) as conn:
         status = conn.execute("SELECT status FROM case_records WHERE case_id=?",(case["case_id"],)).fetchone()[0]
-    assert status == ("review_completed" if verdict == "consistent" else "pending_review")
+    assert status == "pending_review"  # AI interpretation never completes human review.
 
 
 @pytest.mark.parametrize("case_status",["action_approved","action_executed","action_rejected","closed"])

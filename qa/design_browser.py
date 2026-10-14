@@ -31,7 +31,7 @@ def main():
                     context=browser.new_context(viewport={"width":width,"height":height},accept_downloads=True)
                     page=context.new_page();page.goto("http://localhost:18503")
                     page.get_by_text("Check every handoff.",exact=False).first.wait_for(timeout=60000)
-                    page.get_by_role("button",name=re.compile("Review issues")).wait_for()
+                    page.get_by_role("button",name=re.compile("Review cases")).wait_for()
                     def capture(view):
                         page.wait_for_timeout(900)
                         page.screenshot(path=str(OUT/f"{view}-{width}.png"),full_page=True)
@@ -47,7 +47,7 @@ def main():
                         else:page.locator(".st-key-nav-"+name).get_by_role("button").click()
                     capture("home")
                     if width==1440:
-                        result["rendered_styles"]={"body":page.locator(".hero-copy").evaluate("e=>({color:getComputedStyle(e).color,fontSize:getComputedStyle(e).fontSize})"),"primary":page.get_by_role("button",name=re.compile("Review issues")).evaluate("e=>({color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor,height:e.getBoundingClientRect().height})")}
+                        result["rendered_styles"]={"body":page.locator(".hero-copy").evaluate("e=>({color:getComputedStyle(e).color,fontSize:getComputedStyle(e).fontSize})"),"primary":page.get_by_role("button",name=re.compile("Review cases")).evaluate("e=>({color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor,height:e.getBoundingClientRect().height})")}
                     if width==1440:
                         first=page.get_by_role("button",name=re.compile("Compare weights")).first.bounding_box()
                         assert first and first["y"]+first["height"]<=900,("first actionable issue below fold",first)
@@ -65,8 +65,8 @@ def main():
                     photo_button.click();page.get_by_role("dialog").wait_for()
                     capture("evidence-photo")
                     page.keyboard.press("Escape")
-                    page.get_by_role("button",name=re.compile("Back to issues")).click()
-                    page.get_by_role("heading",name="Issues to review",exact=True).wait_for()
+                    page.get_by_role("button",name=re.compile("Back to cases")).click()
+                    page.get_by_role("heading",name="Cases to review",exact=True).wait_for()
                     capture("issues")
                     if width==1440:
                         root=page.get_by_test_id("stMain")
@@ -76,8 +76,8 @@ def main():
                         page.wait_for_timeout(500)
                         saved=page.evaluate("Number(sessionStorage.getItem('pvIssueScroll'))")
                         assert root.evaluate("e=>e.scrollTop")==0
-                        page.get_by_role("button",name=re.compile("Back to issues")).click()
-                        page.get_by_role("heading",name="Issues to review",exact=True).wait_for()
+                        page.get_by_role("button",name=re.compile("Back to cases")).click()
+                        page.get_by_role("heading",name="Cases to review",exact=True).wait_for()
                         page.wait_for_timeout(500)
                         restored=root.evaluate("e=>e.scrollTop")
                         assert abs(saved-restored)<3,(saved,restored)
@@ -85,8 +85,8 @@ def main():
                     select=page.get_by_test_id("stSelectbox").filter(has=page.get_by_text("Issue type",exact=True))
                     select.get_by_role("combobox").click()
                     page.get_by_role("option",name="Data access",exact=True).click()
-                    page.get_by_role("button",name=re.compile("Review access")).first.click()
-                    page.get_by_role("heading",name="Check an access request",exact=True).wait_for()
+                    page.locator('[class*="st-key-open-"]').get_by_role('button').first.click()
+                    page.get_by_role("heading",name="Related account activity",exact=True).first.wait_for()
                     capture("access-issue")
                     nav("Partners")
                     page.get_by_role("heading",name="Delivery partners",exact=True).wait_for()

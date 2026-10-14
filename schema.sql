@@ -242,3 +242,51 @@ CREATE TABLE IF NOT EXISTS tool_executions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tool_exec_case ON tool_executions(case_id, created_at);
+
+-- Additive investigation grouping. Original event-scoped cases remain intact.
+CREATE TABLE IF NOT EXISTS case_members (
+ parent_case_id TEXT NOT NULL REFERENCES case_records(case_id),
+ member_case_id TEXT PRIMARY KEY REFERENCES case_records(case_id),
+ linkage_reason TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS case_findings (
+ finding_id TEXT PRIMARY KEY,
+ case_id TEXT NOT NULL REFERENCES case_records(case_id),
+ category TEXT NOT NULL,
+ description TEXT NOT NULL,
+ evidence_ids_json TEXT NOT NULL,
+ required INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS finding_reviews (
+ finding_id TEXT PRIMARY KEY REFERENCES case_findings(finding_id),
+ outcome TEXT NOT NULL,
+ reason TEXT NOT NULL,
+ evidence_ids_json TEXT NOT NULL,
+ reviewed_by TEXT NOT NULL,
+ reviewed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS case_decisions (
+ decision_id TEXT PRIMARY KEY,
+ case_id TEXT NOT NULL REFERENCES case_records(case_id),
+ outcome TEXT NOT NULL,
+ reason TEXT NOT NULL,
+ evidence_ids_json TEXT NOT NULL,
+ unresolved_json TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_submissions (
+ submission_id TEXT PRIMARY KEY,
+ task_id TEXT NOT NULL REFERENCES evidence_tasks(task_id),
+ submission_key TEXT NOT NULL UNIQUE,
+ intent_hash TEXT NOT NULL,
+ event_id TEXT NOT NULL REFERENCES events(event_id),
+ photo_id TEXT REFERENCES photos(photo_id),
+ actor_id TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ review_status TEXT NOT NULL DEFAULT 'pending',
+ review_reason TEXT,
+ reviewed_by TEXT,
+ reviewed_at TEXT
+);

@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -63,6 +64,7 @@ def propose_action(
         ).fetchone()
         if not case:
             raise ValueError(f"Case {case_id} not found")
+        if case[1]=='closed':raise ValueError('Reopen the case before proposing a follow-up')
 
         # Only investigators and admins can propose actions
         if actor.role not in ("investigator", "admin"):
@@ -99,6 +101,7 @@ def propose_action(
              ActionStatus.PROPOSED.value, actor.actor_id,
              expires_at, reason),
         )
+        append_audit(db_path,actor.actor_id,case_id,'action_proposed',dict(action_id=action_id,action_type=action_type,reason=reason,target_id=target_id),tx=conn)
         conn.commit()
 
         return {"action_id": action_id, "status": ActionStatus.PROPOSED.value, "is_new": True}
@@ -119,9 +122,12 @@ def review_action(
     ``rejected`` is terminal — cannot transition to executed or back to approved (D-019).
     """
     actor = _validate_actor(actor_context or {})
+    if actor.is_simulated and actor.actor_id in ('SYSTEM-DEMO','SYSTEM-VERIFICATION'):
+        raise AuthorizationError('System detection cannot approve a human request')
 
     if decision not in ("approve", "reject"):
         raise ValueError(f"Invalid decision: {decision}. Must be 'approve' or 'reject'")
+    reason=reason.strip() or ('Supervisor approved the recorded request.' if decision=='approve' else 'Supervisor rejected the recorded request.')
 
     conn = get_connection(db_path)
     try:
@@ -163,7 +169,8 @@ def review_action(
         append_audit(
             db_path, actor.actor_id, case_id,
             f"action_{decision}d",
-            {"action_id": action_id, "action_type": action_type, "reason": reason},
+            {"action_id": action_id, "action_type": action_type, "reason": reason,
+             "request_fingerprint":hashlib.sha256(json.dumps([action_id,action_type,target_id,conn.execute('SELECT reason FROM action_requests WHERE action_id=?',(action_id,)).fetchone()[0]]).encode()).hexdigest()},
             tx=conn,
         )
 
@@ -180,6 +187,26 @@ def review_action(
         raise
     finally:
         conn.close()
+
+def revise_request(db_path,action_id,actor_context,reason,*,request_id):
+    """Replace an editable proposal; an old approval never authorizes the revision."""
+    actor=_validate_actor(actor_context)
+    if actor.role not in ('admin','investigator'):raise AuthorizationError('Only investigators may revise a request')
+    if len(reason.strip())<10:raise ValueError('Record a meaningful revised request')
+    with get_connection(db_path) as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        previous=conn.execute('SELECT case_id,action_type,target_id,status,requested_by FROM action_requests WHERE action_id=?',(action_id,)).fetchone()
+        if not previous:raise ValueError('Request not found')
+        if actor.role!='admin' and previous[4]!=actor.actor_id:raise AuthorizationError('Only the requester may revise this proposal')
+        existing=conn.execute('SELECT case_id,reason FROM action_requests WHERE action_id=?',(request_id,)).fetchone()
+        if existing:
+            if existing!=(previous[0],reason.strip()):raise IdempotencyError('Revision retry reference conflicts')
+            return {'action_id':request_id,'is_new':False}
+        if previous[3] not in ('proposed','approved'):raise ValueError('Only pending proposals may be revised')
+        conn.execute("UPDATE action_requests SET status='rejected' WHERE action_id=?",(action_id,))
+        conn.execute("INSERT INTO action_requests(action_id,case_id,action_type,target_id,status,requested_by,reason) VALUES(?,?,?,?,'proposed',?,?)",(request_id,previous[0],previous[1],previous[2],actor.actor_id,reason.strip()))
+        append_audit(db_path,actor.actor_id,previous[0],'request_revised',dict(previous_action_id=action_id,new_action_id=request_id,reason=reason.strip(),approval_invalidated=True),tx=conn)
+    return {'action_id':request_id,'is_new':True}
 
 
 def execute_action(
@@ -253,7 +280,8 @@ def execute_action(
             }
 
         approval = conn.execute("SELECT details_json FROM audit_log WHERE case_id = ? AND actor_id = ? AND operation = 'action_approved'", (case_id, approved_by)).fetchall()
-        if not approved_by or not any(json.loads(row[0]).get("action_id") == action_id for row in approval):
+        fingerprint=hashlib.sha256(json.dumps([action_id,action_type,target_id,reason]).encode()).hexdigest()
+        if not approved_by or not any(json.loads(row[0]).get("action_id") == action_id and json.loads(row[0]).get('request_fingerprint')==fingerprint for row in approval):
             raise AuthorizationError("Action has no verified approval record")
         if status not in (ActionStatus.APPROVED.value, ActionStatus.FAILED.value):
             raise AuthorizationError("Action is not approved")
@@ -272,7 +300,7 @@ def execute_action(
                 "error": f"Case {case_id} not found",
             }
         case_status = case[0]
-        if case_status in (CaseStatus.CLOSED.value, CaseStatus.ACTION_EXECUTED.value):
+        if case_status == CaseStatus.CLOSED.value:
             return {
                 "action_id": action_id,
                 "status": "failed",

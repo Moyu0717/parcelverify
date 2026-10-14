@@ -27,11 +27,10 @@ def main():
         initialize_reviews(path, actor)
         with get_connection(path) as conn:
             main_case = conn.execute("SELECT case_id FROM case_records WHERE shipment_id='PV-DEMO-001'").fetchone()[0]
-            explained_event = conn.execute("SELECT event_id FROM events WHERE shipment_id='PV-SHIP-011' AND event_type='handoff_submitted'").fetchone()[0]
-        explained = create_or_update_case(path, "PV-SHIP-011", explained_event, [])
-        incomplete = submit_handoff(path, actor, "PV-SHIP-002", "handoff_submitted", {}, datetime.now(timezone.utc).isoformat())
+            explained_case = conn.execute("SELECT case_id FROM case_records WHERE shipment_id='PV-SHIP-011'").fetchone()[0]
+            incomplete_case = conn.execute("SELECT case_id FROM case_records WHERE shipment_id='PV-SHIP-021'").fetchone()[0]
         results = []
-        for label, case_id in [("main_exception", main_case), ("supported_repackaging", explained["case_id"]), ("insufficient_evidence", incomplete["case"]["case_id"])]:
+        for label, case_id in [("main_exception", main_case), ("supported_repackaging", explained_case), ("insufficient_evidence", incomplete_case)]:
             result = investigate_case(path, case_id, actor)
             results.append({"scenario": label, **result})
         destination = Path(args.output)

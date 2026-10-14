@@ -21,6 +21,8 @@ import os
 import random
 import sqlite3
 import uuid
+import itertools
+_ID_COUNTER = itertools.count()
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
@@ -71,7 +73,7 @@ BASE_DATE = datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc)
 
 
 def _uuid() -> str:
-    return str(uuid.uuid4())
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"demo-v4:{next(_ID_COUNTER)}"))
 
 
 def _iso(dt: datetime) -> str:
@@ -244,7 +246,7 @@ def _generate_events(
 ) -> list[dict]:
     """Generate 3-5 events per shipment."""
     events = []
-    received_at = _iso(datetime.now(timezone.utc))
+    received_at = _iso(BASE_DATE + timedelta(days=40))
 
     for i, ship in enumerate(shipments):
         pid = ship["partner_id"]
@@ -286,7 +288,7 @@ def _generate_events(
             handoff_weight = ship["expected_weight_g"] - 150.0  # Explained
         else:
             handoff_weight = round(
-                ship["expected_weight_g"] + rng.uniform(-50, 50), 1
+                ship["expected_weight_g"], 1
             )
 
         events.append(
@@ -301,7 +303,7 @@ def _generate_events(
                 "source": "handoff_app",
                 "payload": {
                     "count": ship["expected_count"],
-                    "weight_g": handoff_weight,
+                    "weight_g": None if ship["shipment_id"] == "PV-SHIP-021" else handoff_weight,
                     "seal_id": ship["expected_seal"],
                     "handoff_location": "Hub " + rng.choice(["A", "B", "C", "D"]),
                 },
@@ -323,10 +325,8 @@ def _generate_events(
                 "received_at": received_at,
                 "source": "pod_system",
                 "payload": {
-                    "recipient_name": rng.choice(
-                        ["John Tan", "Sarah Lee", "Mike Chen",
-                         "Emma Wong", "David Lim"]
-                    ),
+                    "recipient_name": "Synthetic recipient " + ship["shipment_id"],
+                    "location_lat": ship["destination_lat"], "location_lon": ship["destination_lon"], "gps_accuracy_m": 10,
                     "signature": True,
                     "delivery_location": "Residential",
                 },
@@ -334,7 +334,7 @@ def _generate_events(
         )
 
         # 4. Optional: recipient_authorization (~50%)
-        if rng.random() < 0.5:
+        if True:
             auth_time = handoff_time - timedelta(
                 hours=rng.randint(1, 6)
             )
@@ -349,14 +349,15 @@ def _generate_events(
                     "received_at": received_at,
                     "source": "auth_portal",
                     "payload": {
-                        "recipient_id": f"REC-{rng.randint(1000, 9999)}",
+                        "recipient_id": "REC-" + ship["shipment_id"],
+                        "recipient_name": "Synthetic recipient " + ship["shipment_id"],
                         "authorization_method": "id_card",
                     },
                 }
             )
 
         # 5. Optional: message_reported (~20%)
-        if rng.random() < 0.2:
+        if False:
             msg_time = pod_time + timedelta(
                 hours=rng.randint(1, 12)
             )
@@ -426,6 +427,11 @@ def _generate_events(
             )
             break
 
+    for ship_id, job in (("PV-DEMO-001", "DEMO-UNUSUAL-A"), ("PV-SHIP-011", "DEMO-EXPORT-B")):
+        common = {"shipment_id": ship_id, "partner_id": "P-QUICKRUN", "actor_id": "APPROVER-001", "received_at": received_at, "source": "synthetic_ops_register"}
+        events.append(dict(common, event_id=_uuid(), event_type="workload_context", occurred_at=_iso(BASE_DATE + timedelta(days=19)), payload={"actor_id": "ACTOR-QR-01", "batch_job_id": job, "normal_downloads_per_15_minutes": 3, "description": "Normal assigned delivery workload: at most three downloads per 15 minutes."}))
+        if ship_id == "PV-SHIP-011":
+            events.append(dict(common, event_id=_uuid(), event_type="authorized_export", occurred_at=_iso(BASE_DATE + timedelta(days=19, minutes=1)), payload={"approved_by": "APPROVER-001", "actor_id": "ACTOR-QR-01", "batch_job_id": job, "shipment_ids": [ship_id], "allowed_fields": ["shipment_id", "status"], "valid_from": _iso(BASE_DATE + timedelta(days=20)), "valid_until": _iso(BASE_DATE + timedelta(days=20, hours=1)), "max_downloads": 8, "reason": "Approved delivery-status reconciliation export."}))
     return events
 
 
@@ -433,25 +439,16 @@ def _generate_photos(events: list[dict]) -> list[dict]:
     """Generate photo records linked to events using fixture images."""
     photos = []
 
-    # Map fixture files to events
-    photo_map = [
-        {"file": "photo_001.jpg", "shipment": "PV-DEMO-001", "event_type": "pod_submitted"},
-        {"file": "photo_002.jpg", "shipment": "PV-DEMO-001", "event_type": "handoff_submitted"},
-        {"file": "photo_003.jpg", "shipment": "PV-DEMO-001", "event_type": "handoff_submitted"},
-        {"file": "photo_004.jpg", "shipment": "PV-DEMO-001", "event_type": "pod_submitted"},
-        {"file": "photo_005.jpg", "shipment": "PV-SHIP-002", "event_type": "handoff_submitted"},
-        {"file": "photo_006.jpg", "shipment": "PV-SHIP-003", "event_type": "handoff_submitted"},
-        {"file": "photo_007.jpg", "shipment": "PV-SHIP-005", "event_type": "handoff_submitted"},
-        {"file": "photo_008.jpg", "shipment": "PV-SHIP-008", "event_type": "pod_submitted"},
-        {"file": "photo_009.jpg", "shipment": "PV-SHIP-012", "event_type": "handoff_submitted"},
-        {"file": "photo_010.jpg", "shipment": "PV-SHIP-015", "event_type": "handoff_submitted"},
-        {"file": "photo_011.jpg", "shipment": "PV-SHIP-020", "event_type": "handoff_submitted"},
-        {"file": "photo_012.jpg", "shipment": "PV-SHIP-025", "event_type": "handoff_submitted"},
-        # Photo reuse: same photo_001.jpg on a different shipment (PV-SHIP-010)
-        {"file": "photo_001.jpg", "shipment": "PV-SHIP-010", "event_type": "handoff_submitted"},
-    ]
+    from demo_fixtures import generate_assets
+    generate_assets(FIXTURES_DIR)
+    photo_map = [{"file": f"v4_{e['shipment_id']}_{e['event_type']}.jpg", "shipment": e["shipment_id"], "event_type": e["event_type"]} for e in events if e["event_type"] in ("handoff_submitted", "pod_submitted")]
+    for entry in photo_map:
+        if entry["shipment"] == "PV-SHIP-010" and entry["event_type"] == "pod_submitted":
+            entry["file"] = "v4_PV-DEMO-001_pod_submitted.jpg"
+        if entry['shipment']=='PV-SHIP-011' and entry['event_type']=='pod_submitted':
+            entry['file']='v4_PV-SHIP-011_near_delivery.jpg'
 
-    uploaded_at = _iso(datetime.now(timezone.utc))
+    uploaded_at = _iso(BASE_DATE + timedelta(days=40))
 
     for pm in photo_map:
         matching = [
@@ -478,7 +475,7 @@ def _generate_photos(events: list[dict]) -> list[dict]:
                 "uploaded_at": uploaded_at,
                 "claimed_capture_at": event["occurred_at"],
                 "capture_method": "upload",
-                "manual_observation": "",
+                "manual_observation": "Synthetic staged parcel illustration; not proof of sealed contents.",
             }
         )
 
@@ -531,40 +528,6 @@ def _generate_access_logs(
         }
     )
 
-    # Unauthorized: MetroLine actor queries SafeLog shipment
-    logs.append(
-        {
-            "log_id": _uuid(),
-            "partner_id": "P-METROLINE",
-            "actor_id": "ACTOR-ML-02",
-            "credential_id": "CREDS-ACTOR-ML-02",
-            "shipment_id": "PV-SHIP-021",
-            "occurred_at": _iso(BASE_DATE + timedelta(days=25, hours=10)),
-            "action": "query_shipment",
-            "outcome": "denied",
-            "returned_fields": json.dumps([]),
-            "batch_job_id": None,
-        }
-    )
-
-    # Batch job access
-    logs.append(
-        {
-            "log_id": _uuid(),
-            "partner_id": "P-QUICKRUN",
-            "actor_id": "BATCH-QR-001",
-            "credential_id": "CREDS-BATCH-QR-001",
-            "shipment_id": "PV-DEMO-001",
-            "occurred_at": _iso(BASE_DATE + timedelta(days=30, hours=2)),
-            "action": "batch_query",
-            "outcome": "authorized",
-            "returned_fields": json.dumps(
-                ["shipment_id", "status", "expected_weight_g"]
-            ),
-            "batch_job_id": "BATCH-2026-10-001",
-        }
-    )
-
     # Authorized access: shipments 20-40
     for ship in shipments[20:40]:
         pid = ship["partner_id"]
@@ -589,6 +552,9 @@ def _generate_access_logs(
             }
         )
 
+    for ship_id, job in (("PV-DEMO-001", "DEMO-UNUSUAL-A"), ("PV-SHIP-011", "DEMO-EXPORT-B")):
+        for minute in range(8):
+            logs.append({"log_id": _uuid(), "partner_id": "P-QUICKRUN", "actor_id": "ACTOR-QR-01", "credential_id": "CREDS-ACTOR-QR-01", "shipment_id": ship_id, "occurred_at": _iso(BASE_DATE + timedelta(days=20, minutes=minute)), "action": "download", "outcome": "authorized", "returned_fields": json.dumps(["shipment_id", "status"]), "batch_job_id": job})
     return logs
 
 
@@ -607,6 +573,8 @@ def seed_demo(
         dict with counts: partners, shipments, events, photos,
               access_logs, contract_history
     """
+    global _ID_COUNTER
+    _ID_COUNTER = itertools.count()
     rng = random.Random(seed)
 
     if reset:

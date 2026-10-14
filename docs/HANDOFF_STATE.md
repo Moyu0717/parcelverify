@@ -1,5 +1,7 @@
 # Verified handoff state — 13 October 2026
 
+Current work is documented in `docs/IMPLEMENTATION_HANDOFF.md`: linked cases, local human/evidence workflow, explicit closure outcomes and new template v5. Earlier UI and acceptance notes below are historical.
+
 Superseded for current UI work by `docs/DESIGN_REBUILD_STATE.md` on 14 October 2026. Navigation is now Home / Issues / Partners with a horizontal header, evidence-first details and 175 passing regression tests. The historical state below records the earlier iteration.
 
 Current priority: implement `reference/ParcelVerify_UI_Refactor.md`, verify local interactions and screenshots, then resume real Gemini and HTTPS acceptance. Never infer real inference from mocked tests.

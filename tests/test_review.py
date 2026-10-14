@@ -27,7 +27,7 @@ def database(tmp_path):
 
 def test_cohort_counts_and_live_scope(database):
     cases = review.list_review_cases(database, actor())
-    assert review.review_counts(cases) == dict(needs_review=3, awaiting_approval=1, resolved=1, review_complete=1)
+    assert review.review_counts(cases) == dict(needs_review=3, awaiting_approval=1, waiting_evidence=0, resolved=1, review_complete=1)
     scoped = review.list_review_cases(database, actor('partner_user', 'p'))
     assert [c['case_id'] for c in scoped] == ['c1']
     assert sum(review.review_counts(scoped).values()) == len(scoped)

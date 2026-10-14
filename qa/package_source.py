@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     output = ROOT / "dist"
     output.mkdir(exist_ok=True)
-    names = ["app.py", "start.py", "workspace.py", "db.py", "seed.py", "contracts.py", "schema.sql",
+    names = ["app.py", "start.py", "workspace.py", "db.py", "seed.py", "demo_fixtures.py", "contracts.py", "schema.sql",
              "requirements.txt", "requirements-lock.txt", "requirements-qa.txt", "README.md", ".gitignore", ".dockerignore",
              ".env.example", "Dockerfile", ".streamlit/config.toml"]
     for directory in ("agent", "services", "ui", "tests", "docs", "qa", "fixtures", "assets"):
@@ -20,6 +20,7 @@ def main():
     names.append("reference/ParcelVerify_Codex_Handoff_Workflow.md")
     names.append("reference/ParcelVerify_UI_Refactor.md")
     names.append("reference/ParcelVerify_Design_and_Usability_Rebuild.md")
+    names.append("reference/ParcelVerify_Codex_Implementation_Brief.md")
     manifest, batch, batches, size = [], [], [], 0
     archive = output / "ParcelVerify-source.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:

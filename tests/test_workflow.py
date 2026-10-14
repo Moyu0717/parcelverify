@@ -77,14 +77,14 @@ def test_all_live_pages_and_partner_scope(tmp_path, monkeypatch):
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
     assert not app.exception
     assert not app.sidebar.radio
-    for page in ('Issues', 'Partners', 'Home'):
+    for page in ('Cases', 'Partners', 'Home'):
         app.button(key='nav-'+page).click().run()
         assert not app.exception
         assert not app.error
     app.button(key='desktop-Settings').click().run()
     app.selectbox(key='role_widget').set_value('partner_user').run()
     assert app.session_state.actor_context['role'] == 'partner_user'
-    app.button(key='nav-Issues').click().run()
+    app.button(key='nav-Cases').click().run()
     assert not app.exception
     assert app.session_state.actor_role == 'partner_user'
     from contracts import ActorContext

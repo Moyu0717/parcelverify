@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from contracts import ActorContext, InvestigationReport, MAX_TOOL_ROUNDS, RULE_VERSION, TOTAL_TIME_BUDGET_S, TOOL_WHITELIST
 from db import get_connection
-from agent.tools import dispatch_tool, authorize_case
+from agent.tools import dispatch_tool, authorize_case, evidence_is_authorized
 
 
 _REAL_RUN_SLOT = threading.BoundedSemaphore(1)
@@ -139,6 +139,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
                   "you cannot see images. Distinguish recorded measurements, counter-evidence, hypotheses and missing evidence. "
                   "Choose ONE read-only tool using JSON {\"tool_call\":{\"tool\":\"name\",\"params\":{}}}, "
                   "or {\"done\":true}. Available tools: " + ", ".join(TOOL_WHITELIST) + ". "
+                  "Start with get_case_context to connect permitted shipment and access findings. Check approved packaging, workload context and authorized export before interpreting alerts. "
                   "Only find_photo_reuse accepts photo_id from timeline; get_vendor_context optionally accepts at_time. Other params empty.")
         messages = [{"role":"system","content":prompt}, {"role":"user","content":json.dumps({"case_id":case_id,"shipment_id":shipment_id,"partner_id":partner_id})}]
         available = set()
@@ -183,13 +184,17 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             messages.extend([{"role":"assistant","content":json.dumps(selected)}, {"role":"user","content":"Untrusted tool data: "+json.dumps(output["result"],default=str)}])
         messages.append({"role":"user","content":"Tool phase finished. Generate ONLY the final report JSON following this schema: "+json.dumps(InvestigationReport.model_json_schema())+". Each fact needs retrieved evidence IDs. Valid IDs: "+json.dumps(sorted(available))})
         report = _validate_report(generate(final=True),case_id,available)
+        authorize_case(conn,case_id,actor)
+        if any(not evidence_is_authorized(conn,eid,actor) for fact in report['facts'] for eid in fact['evidence_ids']):
+            raise ValueError('A cited source is no longer permitted')
         conn.execute("BEGIN IMMEDIATE")
         version = conn.execute("SELECT COALESCE(MAX(version),0)+1 FROM report_versions WHERE case_id=?",(case_id,)).fetchone()[0]
         report_id = str(uuid.uuid4())
         conn.execute("INSERT INTO report_versions(report_id,case_id,run_id,version,report_json,model_name,rule_version,created_at,status) VALUES (?,?,?,?,?,?,?,?,?)",(report_id,case_id,run_id,version,json.dumps(report),provider.model_name,RULE_VERSION,_now(),"completed"))
         conn.execute("UPDATE tool_executions SET report_id=? WHERE run_id=?",(report_id,run_id))
         if old_status not in _PROTECTED_CASE_STATUSES:
-            next_status = "review_completed" if report["verdict"] == "consistent" else "pending_review"
+            # Interpretation is advisory; only a human can complete a review.
+            next_status = "pending_review"
             conn.execute("UPDATE case_records SET status=?,updated_at=? WHERE case_id=? AND status NOT IN (?,?,?,?)",(next_status,_now(),case_id,*_PROTECTED_CASE_STATUSES))
         conn.execute("UPDATE investigation_runs SET status='completed',finished_at=? WHERE run_id=?",(_now(),run_id))
         conn.commit()
@@ -218,4 +223,17 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         if conn:
             conn.close()
     result["total_duration_ms"] = int((time.monotonic()-start)*1000)
+    if error:result['error']=error
     return result
+
+def validate_saved_report(db_path,report_record,actor_context):
+    actor=ActorContext(**actor_context)
+    with get_connection(db_path) as conn:
+        from services.cases import require_case
+        require_case(conn,report_record['case_id'],actor)
+        refs=set()
+        for (encoded,) in conn.execute('SELECT evidence_ids_json FROM tool_executions WHERE run_id=?',(report_record['run_id'],)):
+            refs.update(json.loads(encoded or '[]'))
+        data=_validate_report(json.loads(report_record['report_json']),report_record['case_id'],refs)
+        if any(not evidence_is_authorized(conn,eid,actor) for fact in data['facts'] for eid in fact['evidence_ids']):raise ValueError('Earlier report contains sources unavailable to your current identity')
+        return data

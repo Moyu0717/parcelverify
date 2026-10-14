@@ -27,6 +27,38 @@ from services.handoff import compare_handoff
 from services.photos import find_photo_reuse
 from services.risk import get_partner_metrics
 
+MAX_LINKED_CASES = 12
+MAX_CONTEXT_EVENTS = 50
+
+
+def _get_case_context(conn, case_id, params, actor, db_path):
+    """Read an authorized incident, preserving original finding provenance."""
+    from services.cases import get_case_context
+    context = get_case_context(db_path, case_id, actor.model_dump())
+    members = context["cases"][:MAX_LINKED_CASES]
+    member_ids = {member["case_id"] for member in members}
+    result = {
+        "case_id": case_id,
+        "cases": [],
+        "findings": [finding for finding in context["findings"] if finding["case_id"] in member_ids],
+        "truncated": len(context["cases"]) > MAX_LINKED_CASES,
+        "limits": {"member_cases": MAX_LINKED_CASES, "events_per_member": MAX_CONTEXT_EVENTS},
+    }
+    for member in members:
+        # Authorization is rechecked for every linked retrieval, rather than inherited.
+        authorize_case(conn, member["case_id"], actor)
+        timeline = _get_shipment_timeline(conn, member["case_id"], {}, actor, db_path)
+        truncated = len(timeline["events"]) > MAX_CONTEXT_EVENTS
+        timeline["events"] = timeline["events"][:MAX_CONTEXT_EVENTS]
+        result["cases"].append({
+            "case_id": member["case_id"], "shipment_id": member["shipment_id"],
+            "partner_id": member["partner_id"], "linkage_reason": member.get("linkage_reason"),
+            "timeline": timeline, "timeline_truncated": truncated,
+            "handoff": _compare_handoff(conn, member["case_id"], {}, actor, db_path),
+            "access": _check_access_scope(conn, member["case_id"], {}, actor, db_path),
+        })
+    return result
+
 
 def _validate_actor(actor_context: dict) -> ActorContext:
     return ActorContext(**actor_context)
@@ -192,6 +224,7 @@ def _get_partner_metrics(
 
 # Tool dispatch table
 _TOOL_DISPATCH = {
+    "get_case_context": _get_case_context,
     "get_vendor_context": _get_vendor_context,
     "get_shipment_timeline": _get_shipment_timeline,
     "compare_handoff": _compare_handoff,
@@ -208,7 +241,30 @@ def authorize_case(conn, case_id, actor):
         raise AuthorizationError("Only investigators and admins may investigate cases")
     if actor.partner_id and actor.partner_id != partner_id:
         raise AuthorizationError("Case is outside the actor's partner scope")
+    from services.access import _is_authorized, _utc_now_iso
+    if not _is_authorized(conn, actor, shipment_id, _utc_now_iso())[0]:
+        raise AuthorizationError("Case is not currently authorized")
     return shipment_id, partner_id
+
+
+def evidence_is_authorized(conn, evidence_id, actor):
+    """Resolve persisted evidence ownership and current object permission."""
+    from services.access import _is_authorized, _utc_now_iso
+    for sql in (
+        "SELECT shipment_id FROM events WHERE event_id=?",
+        "SELECT e.shipment_id FROM photos p JOIN events e ON e.event_id=p.event_id WHERE p.photo_id=?",
+        "SELECT shipment_id FROM access_logs WHERE log_id=?",
+    ):
+        row = conn.execute(sql, (evidence_id,)).fetchone()
+        if row:
+            ship = conn.execute("SELECT partner_id FROM shipments WHERE shipment_id=?", (row[0],)).fetchone()
+            return bool(ship and (not actor.partner_id or ship[0] == actor.partner_id)
+                        and _is_authorized(conn, actor, row[0], _utc_now_iso())[0])
+    row = conn.execute("SELECT partner_id FROM contract_history WHERE history_id=?", (evidence_id,)).fetchone()
+    if not row:
+        row = conn.execute("SELECT partner_id FROM partners WHERE vendor_evidence_id=?", (evidence_id,)).fetchone()
+    return bool(row and actor.role in ("admin", "investigator", "approver")
+                and (not actor.partner_id or row[0] == actor.partner_id))
 
 
 def _evidence_ids(value):
@@ -249,7 +305,9 @@ def dispatch_tool(db_path, tool_name, params, case_context, actor_context):
             datetime.fromisoformat(params["at_time"].replace("Z", "+00:00"))
         if tool_name == "find_photo_reuse":
             photo_id = params.get("photo_id")
-            if not isinstance(photo_id, str) or not conn.execute("SELECT 1 FROM photos p JOIN events e ON e.event_id=p.event_id WHERE p.photo_id=? AND e.shipment_id=?", (photo_id, shipment_id)).fetchone():
+            from services.cases import get_case_context
+            scope=get_case_context(db_path,case_id,actor_context)['shipment_ids']
+            if not isinstance(photo_id,str) or not conn.execute('SELECT 1 FROM photos p JOIN events e ON e.event_id=p.event_id WHERE p.photo_id=? AND e.shipment_id IN ('+','.join('?' for _ in scope)+')',[photo_id,*scope]).fetchone():
                 raise ValueError("Photo does not belong to this case's shipment")
         result = _TOOL_DISPATCH[tool_name](conn, case_id, params, actor, db_path)
         if "error" in result:
@@ -257,9 +315,7 @@ def dispatch_tool(db_path, tool_name, params, case_context, actor_context):
         evidence_ids = []
         for evidence_id in sorted(_evidence_ids(result)):
             # Payload fields are untrusted; only persisted identifiers are admissible.
-            if any(conn.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (evidence_id,)).fetchone()
-                   for table, column in (("events", "event_id"), ("photos", "photo_id"),
-                                         ("access_logs", "log_id"), ("contract_history", "history_id"))):
+            if evidence_is_authorized(conn, evidence_id, actor):
                 evidence_ids.append(evidence_id)
         summary = f"Retrieved {tool_name}: {len(evidence_ids)} evidence references"
     except Exception as exc:

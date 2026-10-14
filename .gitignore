@@ -11,3 +11,6 @@ reports/
 .workbuddy-ai/
 dist/
 qa/artifacts/
+# Generated deterministic synthetic evidence is reconstructed from the local
+# source asset by demo_fixtures.py; retain original static reference fixtures.
+fixtures/v4_*.jpg

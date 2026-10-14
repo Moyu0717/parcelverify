@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ============================================================
@@ -69,7 +69,7 @@ class CaseStatus(str, Enum):
 
 class ReportVerdict(str, Enum):
     CONSISTENT = "consistent"
-    NEEDS_REVIEW = "needs_review"
+    NEEDS_REVIEW = "requires_review"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
@@ -245,6 +245,11 @@ class InvestigationReport(BaseModel):
     requires_approval: bool = True
     limitations: str = ""
 
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def normalize_legacy_verdict(cls, value):
+        return "requires_review" if value in ("needs_review", "requires review") else "insufficient_evidence" if value == "insufficient evidence" else value
+
 
 class ToolCallRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -272,6 +277,7 @@ class InvestigationResult(BaseModel):
 # ============================================================
 
 TOOL_WHITELIST: list[str] = [
+    "get_case_context",
     "get_vendor_context",
     "get_shipment_timeline",
     "compare_handoff",

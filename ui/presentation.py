@@ -48,7 +48,11 @@ def format_time(value):
         return "Time not confirmed"
 
 def format_weight(value):
-    return f"{float(value)/1000:.2f} kg" if value is not None else "Missing"
+    if value is None:return 'Missing'
+    text=f'{float(value)/1000:.5f}'.rstrip('0')
+    if text.endswith('.'):text+='00'
+    elif len(text.split('.')[1])<2:text+='0'
+    return text+' kg'
 
 def difference_weight(value):
     if value is None:

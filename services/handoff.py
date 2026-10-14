@@ -77,8 +77,9 @@ def compare_handoff(
             handoff = None
         else:
             candidates = conn.execute("""SELECT payload_json, event_id FROM events WHERE shipment_id = ?
-                AND event_type IN ('handoff_submitted', 'collection_submitted', 'collection_confirmed', 'collected',
+                AND (event_type IN ('handoff_submitted', 'collection_submitted', 'collection_confirmed', 'collected',
                 'collection', 'transit_submitted', 'transit_handoff', 'transit', 'pod_submitted')
+                OR (event_type='weight_measured' AND source LIKE 'task_response:%'))
                 AND (? IS NULL OR julianday(occurred_at) <= julianday(?))
                 ORDER BY julianday(occurred_at) DESC""", (shipment_id, cutoff, cutoff)).fetchall()
             handoff = next((row for row in candidates if any(key in json.loads(row[0]) for key in measurement_keys)), None)

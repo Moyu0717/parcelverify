@@ -6,7 +6,7 @@ An English logistics investigation prototype for monitoring external partners an
 
 Use Python 3.11. Install `requirements.txt`, then run `python start.py`. On this checkout, use `.venv\Scripts\python.exe start.py`. Open `http://localhost:8501`.
 
-Three horizontal destinations cover the review loop: Home, Issues and Partners. Home explains the service and opens actionable work. Issues shows understandable concerns and evidence first, with requests beside the records on desktop and after them on mobile. Send a request for approval, approve or reject it, then apply an approved step separately. Evidence comparisons, actual source records, demonstration photos, access reviews and readable issue downloads stay together. Workspace > Settings contains demo roles and recovery tools. AI failure is explicit; evidence and authorized manual processing remain available. No mock AI reports appear in the product.
+Three horizontal destinations cover the review loop: Home, Cases and Partners. Related shipment and access findings share a permission-filtered investigation while retaining original records. Propose a request, obtain a human approval, apply it once, receive linked partner evidence, review the response and record an explicit closure outcome. Missing evidence cannot silently become verified. Workspace > Settings contains named demo roles and recovery tools. Real AI has bounded read-only retrieval and current citation validation; unavailable inference leaves manual operation intact. No mock AI reports appear in the product.
 
 ## Configure Gemini securely
 
@@ -36,3 +36,5 @@ Each browser receives a separate synthetic dataset. Save the private recovery to
 See [deployment](docs/DEPLOYMENT.md), [test report](docs/TEST_REPORT.md), [limitations](docs/KNOWN_LIMITATIONS.md) and the [five-minute demo](docs/DEMO_SCRIPT.md). A deployment URL and remote real-model acceptance are required before claiming the live prototype complete.
 
 The current [design rebuild handoff](docs/DESIGN_REBUILD_STATE.md) records the GREENWAY reference inspection, actual-screen screenshots, 175-test acceptance and remaining hosted blockers. Home's locally stored decorative image has [documented generated provenance](assets/README.md) and never enters shipment evidence.
+
+The authoritative current [implementation handoff](docs/IMPLEMENTATION_HANDOFF.md) describes Cases A/B/C, permissions, task responses, migration, exact validation results and the missing Gemini credential. Run `python qa/evaluate_demo.py` for declared synthetic ground truth; live AI acceptance is a separate check. New demo template v5 preserves existing visitor workspaces and creates 56 clean background shipments alongside three featured investigations.

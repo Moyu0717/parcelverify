@@ -43,7 +43,7 @@ def list_review_cases(db_path: str, actor_context: dict) -> list[dict]:
 
 
 def review_counts(cases: list[dict]) -> dict:
-    counts = dict.fromkeys(('needs_review', 'awaiting_approval', 'resolved', 'review_complete'), 0)
+    counts = dict.fromkeys(('needs_review', 'awaiting_approval', 'waiting_evidence', 'resolved', 'review_complete'), 0)
     for case in cases:
         counts[case['work_bucket']] += 1
     return counts

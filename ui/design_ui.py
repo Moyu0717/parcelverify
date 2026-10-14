@@ -12,6 +12,7 @@ from ui.presentation import format_time, format_weight, difference_weight, stage
 from services.handoff import compare_handoff
 from services.review import review_counts
 from services.access import check_access_scope
+from ui.case_workflow import linked_evidence, next_step, photo_comparison
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -23,7 +24,7 @@ def header():
     with st.container(key="desktop-header"):
         brand,home,issues,partners,account=st.columns([3.6,1,1,1,1.4],vertical_alignment="center")
         brand.html('<div class="brand"><span class="brand-symbol">↗</span>ParcelVerify<span class="demo-tag">DEMO</span></div>')
-        for col,name in ((home,"Home"),(issues,"Issues"),(partners,"Partners")):
+        for col,name in ((home,"Home"),(issues,"Cases"),(partners,"Partners")):
             col.button(name,key="nav-"+name,type="primary" if current==name and not st.session_state.get("secondary_view") else "tertiary",on_click=navigate,args=(name,),use_container_width=True)
         with account.popover("Workspace",icon=":material/account_circle:",use_container_width=True):
             secondary_menu("desktop")
@@ -31,7 +32,7 @@ def header():
         brand,menu=st.columns([2.5,1],vertical_alignment="center")
         brand.html('<div class="brand"><span class="brand-symbol">↗</span>ParcelVerify</div>')
         with menu.popover("Menu",icon=":material/menu:"):
-            for name in ("Home","Issues","Partners"):
+            for name in ("Home","Cases","Partners"):
                 st.button(name,key="mobile-nav-"+name,on_click=navigate,args=(name,),use_container_width=True)
             st.caption("Demo workspace")
             secondary_menu("mobile")
@@ -46,6 +47,8 @@ def set_secondary(name):
 
 def issue_info(case):
     categories={f["category"] for f in case["findings"]}
+    if 'authorized_export' in categories and not (categories-{'authorized_export'}):
+        return 'Supported legitimate explanation','Approved export and linked packaging evidence are available.','Review explanation','Review a supported explanation'
     if case["issue_type"]=="access":
         return "Access outside assigned work","A request was denied outside the recorded assignment.","Review access","Check an access request"
     if "weight_diff" in categories:
@@ -84,28 +87,28 @@ def shortcut(bucket):
     work.route(bucket=bucket,partner="")
 
 def show_search():
-    work.route("Issues",bucket="all",partner="")
+    work.route("Cases",bucket="all",partner="")
     st.session_state.find_shipment_hint=True
 
 def home():
     with st.container(key="home-intro"):
         text,photo=st.columns([1.15,1],gap="large",vertical_alignment="center")
         with text:
-            st.html('<p class="eyebrow">CLARITY AT EVERY HANDOFF</p><h1 class="hero-title">Check every handoff.<br>Understand<br><span>every issue.</span></h1><p class="hero-copy">Review shipment evidence and unusual data access across your delivery partners.</p>')
+            st.html('<p class="eyebrow">CLARITY AT EVERY HANDOFF</p><h1 class="hero-title">Check every handoff.<br><span>Understand every issue.</span></h1><p class="hero-copy">Review shipment evidence and unusual data access across your delivery partners.</p>')
             primary,secondary=st.columns([1,1.15])
-            primary.button("Review issues",type="primary",icon=":material/arrow_forward:",on_click=shortcut,args=("needs_review",),use_container_width=True)
+            primary.button("Review cases",type="primary",icon=":material/arrow_forward:",on_click=shortcut,args=("needs_review",),use_container_width=True)
             secondary.button("Find a shipment",on_click=show_search,use_container_width=True)
         with photo:
             encoded=base64.b64encode((ROOT/"assets/logistics-hero.png").read_bytes()).decode()
             st.html('<figure class="hero-photo"><img src="data:image/png;base64,'+encoded+'" alt="Decorative generated photograph of a green delivery truck beside a warehouse"><figcaption>Built around the records behind every delivery.<span>Illustrative image · AI generated</span></figcaption></figure>')
     counts=review_counts(work.cases())
     with st.container(key="summary-strip"):
-        for col,title,bucket in zip(st.columns(3),("Needs review","Waiting for approval","Resolved"),("needs_review","awaiting_approval","resolved")):
+        for col,title,bucket in zip(st.columns(4),("Needs review","Waiting for approval","Waiting for evidence","Closed"),("needs_review","awaiting_approval","waiting_evidence","resolved")):
             with col:
                 st.html('<div class="summary-number"><strong>'+str(counts[bucket])+'</strong><span>'+title+'</span></div>')
                 st.button("View "+title.lower(),key="counter-"+bucket,type="tertiary",on_click=shortcut,args=(bucket,))
     st.html('<div class="section-heading"><h2>Start with what needs attention</h2><p>All recorded history · only issues you are permitted to review</p></div>')
-    queue=[c for c in work.cases() if c["work_bucket"] in ("needs_review","awaiting_approval")]
+    queue=[c for c in work.cases() if c["work_bucket"] in ("needs_review","awaiting_approval","waiting_evidence")]
     queue.sort(key=lambda c:c["priority_score"] or 0,reverse=True)
     issue_header()
     for case in queue[:3]: issue_row(case)
@@ -121,11 +124,11 @@ def issues():
         if case: detail(case)
         else:
             st.warning("This issue is not available to your current role.")
-            st.button("Back to issues",on_click=work.back)
+            st.button("Back to cases",on_click=work.back)
         return
     if st.session_state.get("selected_shipment_id"):
         work.shipment_detail(st.session_state.selected_shipment_id);return
-    st.title("Issues to review")
+    st.title("Cases to review")
     st.write("Check what happened and decide what information is needed next.")
     with st.container(key="issue-search"):
         field,find=st.columns([5,1.4],vertical_alignment="bottom")
@@ -140,7 +143,7 @@ def issues():
         partners={c["partner_id"]:c["partner_name"] for c in cohort};options=["All partners",*partners.values()]
         name=partner.selectbox("Partner",options,index=options.index(partners.get(st.session_state.get("filter_partner"),"All partners")),key="partner_widget")
         st.session_state.filter_partner=next((pid for pid,n in partners.items() if n==name),"")
-    filtered=[c for c in cohort if (bucket=="all" or c["work_bucket"]==bucket) and (st.session_state.get("filter_issue","all")=="all" or c["issue_type"]==st.session_state.filter_issue) and (not st.session_state.filter_partner or c["partner_id"]==st.session_state.filter_partner) and (not query or query.lower() in " ".join((c["shipment_id"],c["partner_name"] or "",*issue_info(c),c["case_id"][:6])).lower())]
+    filtered=[c for c in cohort if (bucket=="all" or c["work_bucket"]==bucket) and (st.session_state.get("filter_issue","all")=="all" or (st.session_state.filter_issue=='access' and c.get('contains_access')) or (st.session_state.filter_issue=='shipment' and c['issue_type']=='shipment')) and (not st.session_state.filter_partner or c["partner_id"]==st.session_state.filter_partner) and (not query or query.lower() in " ".join((c["shipment_id"],c["partner_name"] or "",*issue_info(c),c["case_id"][:6])).lower())]
     filtered.sort(key=lambda c:c["priority_score"] or 0,reverse=True)
     st.caption(f"{len(filtered)} issues across {len({c['shipment_id'] for c in filtered})} shipments · all recorded history")
     if not filtered: st.info("No issues match. Change the filters or use Find shipment to open a permitted record.");return
@@ -160,19 +163,22 @@ def weight_evidence(case):
     dispatch=next((e for e in source if e["event_type"]=="dispatch_confirmed"),None)
     with st.container(key="weight-comparison"):
         a,b=st.columns(2)
-        for col,label,weight,event in ((a,"Before dispatch",value["weight_g"]["expected"],dispatch),(b,"At handover",value["weight_g"]["actual"],handoff)):
+        after_label='New weight measurement' if handoff and handoff['event_type']=='weight_measured' else 'At handover'
+        for col,label,weight,event in ((a,"Before dispatch",value["weight_g"]["expected"],dispatch),(b,after_label,value["weight_g"]["actual"],handoff)):
             with col:
                 st.html('<div class="weight-value"><span>'+label+'</span><strong>'+format_weight(weight)+'</strong></div>')
                 st.caption((stage_label(event["event_type"])+" · "+format_time(event["occurred_at"])) if event else "Stage record missing")
                 st.caption("Source: "+humanize(event["source"]) if event else "Source: shipment expectation only")
         st.html('<div class="weight-result"><span>RECORDED DIFFERENCE</span><strong>'+esc(difference_weight(value["weight_g"]["diff"]))+'</strong></div>')
-    st.write("The recorded weights differ. Check the source records and any packaging change before deciding why.")
+    st.write("The latest weight matches the expectation; review the original signal and subsequent evidence before closing." if value['weight_g']['match'] else "The recorded weights differ. Check the source records and any packaging change before deciding why.")
+    st.caption('Rule tolerance: the larger of 100 g or 5% of the earlier weight. Display precision preserves recorded differences; a small difference can still match within tolerance.')
     for event in source:
         if event["event_type"]=="repackaging_approved":
             payload=json.loads(event["payload_json"])
             st.info("Approved packaging change recorded: "+payload.get("reason","Review its supporting measurements."))
             measurements=[format_weight(json.loads(e["payload_json"]).get("weight_g")) for e in source if e["event_id"] in payload.get("supporting_measurement_ids",[])]
             st.caption("Linked weight checks: "+" → ".join(measurements) if measurements else "Supporting measurements are not recorded.")
+    if any(f['category']=='photo_reuse' for f in case['findings']):return value
     st.subheader("Photos supporting this review")
     images=rows("SELECT p.*,e.event_type,e.occurred_at FROM photos p JOIN events e ON p.event_id=e.event_id WHERE e.shipment_id=? ORDER BY e.occurred_at",(case["shipment_id"],))
     if not images:st.info("A supporting photo is missing. Add one or request a photo before drawing conclusions.")
@@ -184,7 +190,7 @@ def weight_evidence(case):
     return value
 
 def detail(case):
-    st.button("Back to issues",icon=":material/arrow_back:",type="tertiary",on_click=work.back)
+    st.button("Back to cases",icon=":material/arrow_back:",type="tertiary",on_click=work.back)
     title,explanation,_,heading=issue_info(case)
     st.html('<p class="eyebrow">'+("DATA ACCESS REVIEW" if case["issue_type"]=="access" else "SHIPMENT EVIDENCE REVIEW")+'</p>')
     st.title(heading)
@@ -192,6 +198,7 @@ def detail(case):
     status_badge(work.label(case),"success" if case["work_bucket"]=="resolved" else "warning")
     evidence,action=st.columns([2.05,1],gap="large")
     with evidence:
+        linked_evidence(case)
         st.subheader("What happened?")
         if case["issue_type"]=="access":
             st.write("A partner account requested a shipment outside its recorded assignment. The access check denied the request; this does not establish intent.")
@@ -199,6 +206,8 @@ def detail(case):
         else:
             if any(f["category"]=="weight_diff" for f in case["findings"]):weight_evidence(case)
             else:st.write(explanation)
+            photo_comparison(case)
+            linked_evidence(case,details=True)
             # The essential comparison and real photos are visible by default.
             with st.expander("All shipment checks, journey and source records",expanded=not any(f["category"]=="weight_diff" for f in case["findings"])):
                 work.shipment_evidence(case["shipment_id"])
@@ -210,7 +219,7 @@ def detail(case):
     with action:
         with st.container(key="action-panel"):
             st.html('<p class="eyebrow">YOUR NEXT STEP</p>')
-            work.next_step(case)
+            next_step(case)
     work.activity(case)
     if context()[1]["role"]!="partner_user":
         with st.expander("Technical evidence details"):
@@ -243,12 +252,15 @@ def partners():
     for partner in rows("SELECT partner_id,name FROM partners ORDER BY name"):
         population={s["shipment_id"] for s in rows("SELECT shipment_id FROM shipments WHERE partner_id=?",(partner["partner_id"],))}&allowed
         if not population:continue
-        related=[c for c in cohort if c["partner_id"]==partner["partner_id"] and c["work_bucket"] in ("needs_review","awaiting_approval")]
+        related=[c for c in cohort if c["partner_id"]==partner["partner_id"] and c["work_bucket"] in ("needs_review","awaiting_approval","waiting_evidence")]
         with st.container(key="partner-directory-"+partner["partner_id"]):
             info,stats,action=st.columns([2.4,2,1.1],vertical_alignment="center")
             info.html('<div class="partner-name"><span>↗</span><h2>'+esc(partner["name"])+'</h2></div>')
-            stats.write(f"**{len(population)} shipments · {len(related)} open issues**")
-            stats.caption(f"Open issues concern {len({c['shipment_id'] for c in related})} shipments. A shipment can have more than one issue.")
+            affected={sid for c in related for sid in c.get('shipment_ids',[c['shipment_id']])}&population
+            stats.write(f"**{len(population)} shipments · {len(related)} open cases**")
+            stats.caption(f"Affected shipments: {len(affected)} / {len(population)}. Waiting tasks: {sum(c.get('open_task_count',0) for c in related)}.")
+            recurring=sorted({f['category'].replace('_',' ') for c in related for f in c.get('linked_findings',[])})
+            if recurring:stats.caption('Findings: '+', '.join(recurring))
             if action.button("View partner",key="partner-"+partner["partner_id"],use_container_width=True):st.session_state.selected_partner_id=partner["partner_id"];st.rerun()
         if selected==partner["partner_id"]:
             with st.container(key="partner-profile"):
@@ -264,7 +276,7 @@ def partners():
                 for case in sorted(related,key=lambda c:c["priority_score"] or 0,reverse=True)[:3]:issue_row(case)
                 st.button("View all partner issues",on_click=work.route,kwargs={"bucket":"all","partner":partner["partner_id"]})
 
-PAGES={"Home":home,"Issues":issues,"Partners":partners}
+PAGES={"Home":home,"Cases":issues,"Partners":partners}
 
 def restore_issue_scroll(view):
     # Only developer-authored JS; no record fields or user input enter this code.

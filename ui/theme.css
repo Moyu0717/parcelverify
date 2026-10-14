@@ -17,7 +17,7 @@ button[kind="primary"]{background:var(--pv-green);border-color:var(--pv-green);c
 .demo-tag{font-size:10px;letter-spacing:1px;padding:4px 7px;background:var(--pv-pale);color:var(--pv-green);border-radius:3px;margin-left:7px}
 [class*="st-key-nav-"] button[kind="primary"]{background:var(--pv-pale);color:var(--pv-green);border:0;border-bottom:2px solid var(--pv-green);border-radius:0}
 .eyebrow{font-size:11px!important;letter-spacing:2px;font-weight:650;color:var(--pv-green);margin:0 0 16px}
-.hero-title{font-size:50px!important;line-height:1.06!important;letter-spacing:-2.5px;font-weight:600!important;margin:0 0 14px!important}
+.hero-title{font-size:44px!important;line-height:1.06!important;letter-spacing:-2px;font-weight:600!important;margin:0 0 14px!important}
 .hero-title span{color:var(--pv-green)}.hero-copy{font-size:17px;max-width:440px;color:var(--pv-muted);margin-bottom:20px}
 .hero-photo{margin:0;position:relative;border-radius:9px;overflow:hidden}
 .hero-photo img{width:100%;height:260px;object-fit:cover;object-position:40% 50%;display:block}
