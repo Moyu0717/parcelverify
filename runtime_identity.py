@@ -1,6 +1,5 @@
 """Compare loaded Python functions with source without executing source or reloading state."""
 import inspect
-import marshal
 import sys
 import types
 from pathlib import Path
@@ -9,7 +8,7 @@ ROOT=Path(__file__).resolve().parent
 
 def signature(code):
     constants=tuple(signature(value) if isinstance(value,types.CodeType) else value for value in code.co_consts)
-    return marshal.dumps((code.co_code,constants,code.co_names,code.co_varnames,code.co_freevars,code.co_cellvars,code.co_argcount,code.co_posonlyargcount,code.co_kwonlyargcount,code.co_flags))
+    return (code.co_code,constants,code.co_names,code.co_varnames,code.co_freevars,code.co_cellvars,code.co_argcount,code.co_posonlyargcount,code.co_kwonlyargcount,code.co_flags)
 
 def loaded_source_status():
     stale=[]
