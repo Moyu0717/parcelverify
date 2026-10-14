@@ -45,10 +45,11 @@ def settings():
     from release_info import build_information, dataset_version, DATASET_VERSION, ai_configuration
     active_dataset = dataset_version(st.session_state.db_path)
     with st.expander("Build information"):
+        st.caption("Release and commit identify the source checkout. Loaded-function verification below checks the active process separately.")
         for label, value in build_information().items(): st.write(f"{label}: {value}")
         stale=runtime_identity.loaded_source_status()
         if stale:
-            st.warning("Loaded Python modules differ from the checked-out source. The owner must use Manage app â†’ Reboot app before this build can be verified.")
+            st.warning("Loaded Python modules differ from the checked-out source. The owner must use Manage app → Reboot app before this build can be verified.")
             st.caption("Modules requiring refresh: "+', '.join(stale))
         else: st.caption("Loaded Python functions match the checked-out source.")
         st.write(f"Active demo dataset: {active_dataset}")
@@ -90,7 +91,7 @@ def settings():
             for label, value in ai_configuration().items(): st.write(f"{label}: {value}")
             st.caption("Configure credentials in Streamlit Secrets. A configured credential is not proof of a successful investigation. Failed runs remain failures; insufficient evidence is a completed report verdict.")
             recent = rows("SELECT status,model_name,error,started_at FROM investigation_runs ORDER BY started_at DESC LIMIT 10")
-            if recent: st.caption("Latest run: "+recent[0]['status']+(' Â· '+recent[0]['error'] if recent[0].get('error') else ''))
+            if recent: st.caption("Latest run: "+recent[0]['status']+(' · '+recent[0]['error'] if recent[0].get('error') else ''))
             else: st.caption("No investigation has been run in this workspace.")
             st.dataframe(recent,hide_index=True)
             if st.session_state.get("technical_error"): st.code(st.session_state.technical_error)

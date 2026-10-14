@@ -26,7 +26,7 @@ def build_information():
                 commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, timeout=3, check=True).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             pass
-    return {'Release': RELEASE, 'Source build': digest.hexdigest()[:16], 'Running commit': commit}
+    return {'Release': RELEASE, 'Source build': digest.hexdigest()[:16], 'Checked-out commit': commit}
 
 def dataset_version(db_path):
     with sqlite3.connect(db_path) as conn:
