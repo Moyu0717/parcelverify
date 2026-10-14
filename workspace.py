@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from db import init_db
 from seed import seed_demo
+from release_info import DATASET_VERSION
 
 ROOT = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("PV_DATA_DIR", str(ROOT / "data" / "workspaces"))).resolve()
@@ -17,14 +18,18 @@ _TEMPLATE_LOCK = threading.Lock()
 def _prepare_template():
     """Reuse only initial synthetic records; never copy a visitor's mutable data."""
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
-    template = DATA_ROOT / "demo-template-v5.db"
+    template = DATA_ROOT / "demo-template-v5-versioned.db"
     with _TEMPLATE_LOCK:
         if not template.exists():
-            temporary = DATA_ROOT / "demo-template-v5.build.db"
+            temporary = DATA_ROOT / "demo-template-v5-versioned.build.db"
             init_db(str(temporary))
             seed_demo(str(temporary), seed=42)
             from services.workflow import initialize_reviews
             initialize_reviews(str(temporary), {"actor_id": "SYSTEM-DEMO", "role": "admin", "session_id": "synthetic-template"})
+            from db import get_connection
+            with get_connection(str(temporary)) as conn:
+                conn.execute('CREATE TABLE IF NOT EXISTS demo_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                conn.execute('INSERT OR REPLACE INTO demo_metadata VALUES (?,?)', ('dataset_version', DATASET_VERSION))
             os.replace(temporary, template)
     return template
 

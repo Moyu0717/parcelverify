@@ -35,6 +35,14 @@ def new_workspace():
 def settings():
     st.title("Settings")
     st.caption("Workspace preferences and demonstration tools.")
+    from release_info import build_information, dataset_version, DATASET_VERSION, ai_configuration
+    active_dataset = dataset_version(st.session_state.db_path)
+    with st.expander("Build information"):
+        for label, value in build_information().items(): st.write(f"{label}: {value}")
+        st.write(f"Active demo dataset: {active_dataset}")
+        st.caption("Schema migration: case-workflow-v1. Dataset versions describe seeded records, not schema migrations.")
+    if active_dataset != DATASET_VERSION:
+        st.warning("This workspace retains older or unversioned demo records. Save its recovery token before opening a separate current demo. Your existing records will remain available within the retention period.")
     with st.expander("Demo tools"):
         st.caption("Simulated identities illustrate permissions. They are not production authentication.")
         roles={"admin":"Administrator","investigator":"Investigator","approver":"Supervisor","partner_user":"Partner"}
@@ -52,6 +60,7 @@ def settings():
                 st.session_state.workspace_token,st.session_state.db_path=token,path
                 route("Home"); st.rerun()
             except ValueError as error: st.error(str(error))
+        st.caption("Start a new demo opens a separate current dataset. It does not delete this workspace. Save its recovery token first to return to these records.")
         st.button("Start a new demo",on_click=new_workspace)
         with st.form("test-access"):
             shipment=st.text_input("Shipment to check",value="PV-DEMO-001")
@@ -66,7 +75,8 @@ def settings():
         with st.expander("Administrative logs"):
             st.dataframe(rows("SELECT actor_id,shipment_id,occurred_at,outcome FROM access_logs ORDER BY occurred_at DESC LIMIT 100"),hide_index=True,use_container_width=True)
         with st.expander("AI connection diagnostics"):
-            st.caption("Connection setup and deployment verification are paused while this interface is being reviewed.")
+            for label, value in ai_configuration().items(): st.write(f"{label}: {value}")
+            st.caption("Configure credentials in Streamlit Secrets. A configured credential is not proof of a successful investigation. Failed runs remain failures; insufficient evidence is a completed report verdict.")
             st.dataframe(rows("SELECT status,model_name,error,started_at FROM investigation_runs ORDER BY started_at DESC LIMIT 10"),hide_index=True)
             if st.session_state.get("technical_error"): st.code(st.session_state.technical_error)
 
