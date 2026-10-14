@@ -1,6 +1,5 @@
 # Validated with Python 3.11.9. Reinstall using these tested direct versions.
 streamlit==1.65.0
-ollama==0.6.3
 httpx==0.28.1
 pydantic==2.14.1
 Pillow==12.3.0

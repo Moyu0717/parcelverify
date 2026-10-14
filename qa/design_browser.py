@@ -16,8 +16,8 @@ def main():
     OUT.mkdir(parents=True,exist_ok=True)
     result={"scope":"Local UI; hosted deployment and real AI remain unverified","checks":[]}
     with tempfile.TemporaryDirectory(prefix="parcelverify-design-") as directory:
-        env=dict(os.environ,PV_DATA_DIR=directory,PV_AI_PROVIDER="gemini")
-        for key in ("GEMINI_API_KEY","PV_AI_API_KEY"):env.pop(key,None)
+        env=dict(os.environ,PV_DATA_DIR=directory,AI_PROVIDER="disabled")
+        for key in ("GROQ_API_KEY","GEMINI_API_KEY","PV_AI_API_KEY"):env.pop(key,None)
         log=(OUT/"server.log").open("w",encoding="utf-8")
         server=subprocess.Popen([str(ROOT/".venv/Scripts/python.exe"),"-m","streamlit","run","app.py","--server.port=18503","--server.headless=true"],cwd=ROOT,env=env,stdout=log,stderr=log)
         try:

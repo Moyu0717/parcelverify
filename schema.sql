@@ -290,3 +290,12 @@ CREATE TABLE IF NOT EXISTS task_submissions (
  reviewed_by TEXT,
  reviewed_at TEXT
 );
+
+-- Persistent idempotency for explicit AI submissions, separate from records.
+CREATE TABLE IF NOT EXISTS investigation_submissions (
+ actor_id TEXT NOT NULL,
+ request_id TEXT NOT NULL,
+ snapshot TEXT NOT NULL,
+ run_id TEXT NOT NULL REFERENCES investigation_runs(run_id),
+ PRIMARY KEY(actor_id,request_id)
+);

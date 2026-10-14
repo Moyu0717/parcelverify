@@ -53,7 +53,7 @@ def settings():
             st.caption("Modules requiring refresh: "+', '.join(stale))
         else: st.caption("Loaded Python functions match the checked-out source.")
         st.write(f"Active demo dataset: {active_dataset}")
-        st.caption("Schema migration: case-workflow-v1. Dataset versions describe seeded records, not schema migrations.")
+        st.caption("Schema migration: case-workflow-v2-groq. Dataset versions describe seeded records, not schema migrations.")
     if active_dataset != DATASET_VERSION:
         st.warning("This workspace retains older or unversioned demo records. Save its recovery token before opening a separate current demo. Your existing records will remain available within the retention period.")
     with st.expander("Demo tools"):
@@ -107,21 +107,21 @@ def help_page():
 
 def main():
     apply_theme()
-    os.environ.setdefault("PV_AI_PROVIDER","gemini")
-    for name in ("PV_AI_PROVIDER","PV_AI_BASE_URL","PV_AI_MODEL","PV_AI_API_KEY","GEMINI_API_KEY","OLLAMA_HOST"):
-        try:
-            if name in st.secrets: os.environ[name]=str(st.secrets[name])
-        except FileNotFoundError: pass
+    from agent.configuration import load_server_configuration
+    try:
+        load_server_configuration(st.secrets)
+    except FileNotFoundError:
+        load_server_configuration({})
     if "db_path" not in st.session_state:
         with st.spinner("Preparing your isolated demo workspace..."):
             prune_expired_workspaces()
             token,path=open_workspace()
             st.session_state.workspace_token,st.session_state.db_path=token,path
     Path(st.session_state.db_path).parent.joinpath(".activity").touch()
-    if st.session_state.get('schema_revision')!='case-workflow-v1':
+    if st.session_state.get('schema_revision')!='case-workflow-v2-groq':
         from db import init_db
         init_db(st.session_state.db_path)
-        st.session_state.schema_revision='case-workflow-v1'
+        st.session_state.schema_revision='case-workflow-v2-groq'
     role=st.session_state.setdefault("actor_role","admin")
     partner=st.session_state.setdefault("actor_partner","P-QUICKRUN") if role=="partner_user" else None
     actor_id={"P-QUICKRUN":"ACTOR-QR-01","P-SAFELOG":"ACTOR-SL-01","P-METROLINE":"ACTOR-ML-01"}.get(partner,f"{role.upper()}-001")

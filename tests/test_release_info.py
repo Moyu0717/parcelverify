@@ -3,16 +3,16 @@ from release_info import build_information, dataset_version, ai_configuration, D
 
 def test_source_identity_and_credentials_are_safe(monkeypatch):
     monkeypatch.setenv('PV_AI_PROVIDER', 'gemini')
-    monkeypatch.setenv('GEMINI_API_KEY', 'private-test-value')
+    monkeypatch.setenv('GROQ_API_KEY', 'private-test-value')
     result = ai_configuration()
     assert 'private-test-value' not in str(result)
     assert result['Credentials'] == 'Configured (not validated)'
-    monkeypatch.delenv('GEMINI_API_KEY')
-    assert result['Provider'] == 'gemini'
-    assert ai_configuration()['Credentials'] == 'Missing GEMINI_API_KEY'
+    monkeypatch.delenv('GROQ_API_KEY')
+    assert result['Provider'] == 'groq'
+    assert ai_configuration()['Credentials'] == 'Missing GROQ_API_KEY'
     monkeypatch.setenv('PV_AI_BASE_URL','https://private.example/secret')
     assert 'private.example' not in str(ai_configuration())
-    assert ai_configuration()['Endpoint'].startswith('Custom override')
+    assert ai_configuration()['Endpoint'] == 'Official Groq API'
     assert len(build_information()['Source build']) == 16
 
 def test_legacy_records_are_not_relabelled(tmp_path):

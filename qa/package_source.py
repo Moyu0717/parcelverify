@@ -12,7 +12,7 @@ def main():
     output.mkdir(exist_ok=True)
     names = ["app.py", "start.py", "workspace.py", "release_info.py", "runtime_identity.py", "db.py", "seed.py", "demo_fixtures.py", "contracts.py", "schema.sql",
              "requirements.txt", "requirements-lock.txt", "requirements-qa.txt", "README.md", ".gitignore", ".dockerignore",
-             ".env.example", "Dockerfile", ".streamlit/config.toml"]
+             ".env.example", "Dockerfile", ".streamlit/config.toml", ".streamlit/secrets.example.toml"]
     for directory in ("agent", "services", "ui", "tests", "docs", "qa", "fixtures", "assets"):
         names.extend(str(file.relative_to(ROOT)).replace("\\", "/") for file in (ROOT / directory).rglob("*")
                      if file.is_file() and "__pycache__" not in file.parts and "artifacts" not in file.parts
@@ -21,6 +21,8 @@ def main():
     names.append("reference/ParcelVerify_UI_Refactor.md")
     names.append("reference/ParcelVerify_Design_and_Usability_Rebuild.md")
     names.append("reference/ParcelVerify_Codex_Implementation_Brief.md")
+    names.append("reference/ParcelVerify_Deployment_Verification_and_Fix.md")
+    names.append("reference/ParcelVerify_Groq_Free_Migration.md")
     manifest, batch, batches, size = [], [], [], 0
     archive = output / "ParcelVerify-source.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:

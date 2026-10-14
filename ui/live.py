@@ -2,12 +2,14 @@
 import json
 import base64
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
 
 from agent.runner import investigate_case
+from agent.configuration import provider_settings
 from contracts import ActionType
 from db import get_connection
 from services.access import _is_authorized, query_shipment
@@ -197,6 +199,37 @@ def handoff_verification():
         st.json(result)
 
 
+def ai_request_token(case_id):
+    # A generation-specific widget rejects queued clicks from the previous run.
+    return st.session_state.setdefault('ai-generation-' + case_id, str(uuid.uuid4()))
+
+
+def ai_failure_message(result):
+    error = str(result.get('error') or '').lower()
+    if result.get('status') == 'config_disabled':
+        return 'AI is disabled by server configuration. Manual review remains available.'
+    if result.get('status') in ('missing_config', 'missing_configuration'):
+        return 'AI is unavailable because GROQ_API_KEY is missing. Manual review remains available.'
+    if '429' in error or 'limit' in error or 'rate' in error:
+        return 'AI has reached a temporary usage limit. Review evidence manually or try later.'
+    if 'missing' in error and ('key' in error or 'credential' in error):
+        return 'AI is unavailable because GROQ_API_KEY is missing. Manual review remains available.'
+    if 'auth' in error or '401' in error or '403' in error:
+        return 'AI credentials could not be validated. Manual review remains available.'
+    if 'model' in error and ('unavailable' in error or 'not found' in error):
+        return 'The configured Groq model is unavailable. Manual review remains available.'
+    if 'timeout' in error or 'timed out' in error:
+        return 'AI took too long to respond. Manual review remains available.'
+    return 'AI could not complete this investigation. Manual review remains available.'
+
+
+def run_case_ai(path, case_id, actor, token):
+    result = investigate_case(path, case_id, actor, request_id=token)
+    if result.get('status') != 'running':
+        st.session_state['ai-generation-' + case_id] = str(uuid.uuid4())
+    return result
+
+
 def investigation():
     _, current_actor = context()
     if current_actor["role"] == "partner_user":
@@ -207,17 +240,18 @@ def investigation():
         return
     path, actor = context()
     st.write("The model selects permitted read-only tools, examines source evidence and counter-evidence, then generates an English report. Every run is saved, including failures.")
-    if actor["role"] in ("admin", "investigator") and st.button("Run AI investigation"):
-        recent = rows("SELECT started_at FROM investigation_runs WHERE started_at>?", (datetime.fromtimestamp(time.time()-3600, timezone.utc).isoformat(),))
-        if len(recent) >= 3:
-            st.warning("This workspace has reached its limit of three investigations per hour.")
+    token = ai_request_token(case["case_id"])
+    settings = provider_settings()
+    configured = settings['configured'] and settings['enabled']
+    if not configured:
+        st.info('Groq AI is unavailable. Configure GROQ_API_KEY and AI_PROVIDER=groq in server settings. Manual review remains available.')
+    if actor["role"] in ("admin", "investigator") and st.button("Run AI investigation", disabled=not configured, key='live-ai-' + case['case_id'] + '-' + token):
+        with st.spinner("Investigating source evidence..."):
+            result = run_case_ai(path, case["case_id"], actor, token)
+        if result["status"] == "completed":
+            st.success("Real model investigation saved.")
         else:
-            with st.spinner("Investigating source evidence..."):
-                result = investigate_case(path, case["case_id"], actor)
-            if result["status"] == "completed":
-                st.success("Real model investigation saved.")
-            else:
-                st.warning(f"Investigation incomplete: {result['status']}. No completed AI report was substituted.")
+            st.warning(ai_failure_message(result))
     st.subheader("Saved runs")
     runs = rows("SELECT run_id, status, model_name, error, started_at, finished_at FROM investigation_runs WHERE case_id=? ORDER BY started_at DESC", (case["case_id"],))
     st.dataframe(runs, hide_index=True, use_container_width=True)
@@ -274,4 +308,3 @@ def approvals():
 PAGES = {"Partner Overview": partner_overview, "Shipment Timeline": shipment_timeline,
          "Access Monitoring": access_monitoring, "Handoff Verification": handoff_verification,
          "AI Investigation": investigation, "Approvals & Audit": approvals}
-

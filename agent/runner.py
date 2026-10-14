@@ -12,15 +12,20 @@ import httpx
 from contracts import ActorContext, InvestigationReport, MAX_TOOL_ROUNDS, RULE_VERSION, TOTAL_TIME_BUDGET_S, TOOL_WHITELIST
 from db import get_connection
 from agent.tools import dispatch_tool, authorize_case, evidence_is_authorized
+from agent.configuration import provider_settings, GROQ_ENDPOINT, bounded_setting
+from agent.usage import reserve_request, evidence_snapshot, UsageLimit
 
 
 _REAL_RUN_SLOT = threading.BoundedSemaphore(1)
 _PROTECTED_CASE_STATUSES = ("action_approved", "action_executed", "action_rejected", "closed")
 
+class ConfigurationError(ValueError):
+    def __init__(self,message,status):super().__init__(message);self.status=status
+
 
 def _safe_error(message):
     text = str(message)
-    for name in ("PV_AI_API_KEY", "GEMINI_API_KEY", "PV_AI_BASE_URL"):
+    for name in ("GROQ_API_KEY", "PV_AI_API_KEY", "GEMINI_API_KEY", "PV_AI_BASE_URL"):
         secret = os.getenv(name, "")
         if secret:
             text = text.replace(secret, "[redacted]")
@@ -51,26 +56,19 @@ def _provider_error(response):
 
 class ModelProvider:
     def __init__(self):
-        self.kind = os.getenv("PV_AI_PROVIDER", "ollama").lower()
-        if self.kind not in ("ollama", "gemini", "openai", "openai-compatible", "openai_compatible"):
-            raise ValueError("Unsupported PV_AI_PROVIDER")
-        self.model_name = os.getenv("PV_AI_MODEL", "qwen3:4b" if self.kind == "ollama" else "gemini-3.5-flash-lite" if self.kind == "gemini" else "")
+        config=provider_settings()
+        if not config['enabled']: raise ConfigurationError('AI_PROVIDER must be groq. Other providers and fallbacks are disabled.','config_disabled')
+        self.kind = 'groq'
+        self.model_name = config['model']
         if not self.model_name:
-            raise ValueError("PV_AI_MODEL is required")
-        self.base_url = os.getenv("PV_AI_BASE_URL", "http://localhost:11434" if self.kind == "ollama" else "https://generativelanguage.googleapis.com/v1beta/openai" if self.kind == "gemini" else "https://api.openai.com/v1").rstrip("/")
-        self.api_key = os.getenv("GEMINI_API_KEY" if self.kind == "gemini" else "PV_AI_API_KEY", "")
-        if self.kind == "gemini" and not self.api_key:
-            raise ValueError("GEMINI_API_KEY is required in server secrets")
+            raise ConfigurationError('GROQ_MODEL is required','missing_configuration')
+        self.api_key = os.getenv('GROQ_API_KEY','').strip()
+        if not self.api_key:raise ConfigurationError('GROQ_API_KEY is missing. Configure it privately; manual review remains available.','missing_configuration')
 
     def generate(self, messages, timeout, final=False):
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        if self.kind == "ollama":
-            url = self.base_url + "/api/chat"
-            payload = {"model": self.model_name, "messages": messages, "stream": False, "format": "json"}
-        else:
-            url = self.base_url + "/chat/completions"
-            response_format = {"type": "json_object"}
-            if final:
+        headers = {'Authorization':f'Bearer {self.api_key}'}
+        response_format = {'type':'json_object'}
+        if final and self.model_name in ('openai/gpt-oss-20b','openai/gpt-oss-120b','qwen/qwen3.8-27b'):
                 schema = InvestigationReport.model_json_schema()
                 # Strict compatible APIs require every defined property to be required.
                 def require_properties(node):
@@ -86,12 +84,18 @@ class ModelProvider:
                 require_properties(schema)
                 response_format = {"type": "json_schema", "json_schema": {
                     "name": "investigation_report", "strict": True, "schema": schema}}
-            payload = {"model": self.model_name, "messages": messages, "response_format": response_format}
-        with httpx.Client(timeout=timeout) as client:
-            response = client.post(url, headers=headers, json=payload)
+        payload = {'model':self.model_name,'messages':messages,'response_format':response_format,
+                   'max_completion_tokens':1024 if final else 512,'stream':False}
+        if self.model_name.startswith('openai/gpt-oss-'):payload['reasoning_effort']='low'
+        with httpx.Client(timeout=min(timeout,20),trust_env=False,transport=httpx.HTTPTransport(retries=0)) as client:
+            response = client.post(GROQ_ENDPOINT, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
-        return data["message"]["content"] if self.kind == "ollama" else data["choices"][0]["message"]["content"]
+        try:
+            choice=data['choices'][0]
+            if choice.get('finish_reason')=='length':raise ValueError('Model output token limit reached; no conclusion was saved.')
+            return choice['message']['content']
+        except (KeyError,IndexError,TypeError):raise ValueError('Malformed Groq response; no conclusion was saved.')
 
 
 def _validate_report(data, case_id, available):
@@ -113,10 +117,30 @@ def _validate_report(data, case_id, available):
     return report.model_dump(mode="json")
 
 
-def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=None, *, provider=None):
+def _tool_message(output):
+    """Keep original tool/audit records; send a declared compact case overview."""
+    data=output['result']
+    if output['tool']=='get_case_context':
+        shipments={}
+        members=[]
+        for member in data['cases']:
+            members.append({k:member[k] for k in ('case_id','shipment_id','partner_id','linkage_reason')})
+            sid=member['shipment_id']
+            if sid not in shipments:
+                contextual=[e for e in member['timeline']['events'] if e['event_type'] in ('repackaging_approved','scale_calibration','approved_batch_job')]
+                shipments[sid]={'handoff':member['handoff'],'context_events':contextual}
+        data={'case_id':data['case_id'],'findings':data['findings'],'members':members,'shipments':shipments,
+              'limits':'Compact overview: detailed timelines and access logs omitted. Use the dedicated local tools if needed. Omitted fields are not evidence for a claim.'}
+    encoded=json.dumps(data,default=str,separators=(',',':'))
+    # Only identifiers actually presented to the model can support a final fact.
+    refs={eid for eid in output['evidence_ids'] if json.dumps(eid) in encoded}
+    return encoded,refs
+
+
+def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=None, *, provider=None, request_id=None):
     start = time.monotonic()
     result = {"case_id": case_id, "status": "error", "tool_calls": [], "report": None,
-              "model_name": None, "rule_version": RULE_VERSION, "report_version": None, "total_duration_ms": 0}
+              "model_name": None, "rule_version": RULE_VERSION, "report_version": None, "total_duration_ms": 0, "request_count":0}
     conn = None
     run_id = None
     old_status = None
@@ -129,19 +153,35 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         shipment_id, partner_id = authorize_case(conn, case_id, actor)
         case = conn.execute("SELECT status FROM case_records WHERE case_id=?", (case_id,)).fetchone()
         old_status = case[0]
+        snapshot=evidence_snapshot(conn,actor) if request_id else None
         rejection = None
+        conn.execute('BEGIN IMMEDIATE')
+        if request_id:
+            if not isinstance(request_id,str) or not 1<=len(request_id)<=120:raise ValueError('Invalid investigation request ID')
+            existing=conn.execute('SELECT s.snapshot,r.run_id,r.case_id,r.status,r.error,r.model_name FROM investigation_submissions s JOIN investigation_runs r ON r.run_id=s.run_id WHERE s.actor_id=? AND s.request_id=?',(actor.actor_id,request_id)).fetchone()
+            if existing:
+                conn.rollback()
+                if existing[0]!=snapshot or existing[2]!=case_id:raise ValueError('Evidence or permissions changed. Start a new investigation with a new request.')
+                result.update(status=existing[3],error=existing[4],model_name=existing[5],deduplicated=True)
+                if existing[3]=='running':result['error']='This investigation is already running. No duplicate request was sent.'
+                if existing[3]=='completed':
+                    conn.row_factory=__import__('sqlite3').Row
+                    saved=conn.execute('SELECT * FROM report_versions WHERE run_id=?',(existing[1],)).fetchone()
+                    result['report']=validate_saved_report(db_path,dict(saved),actor.model_dump())
+                    result['report_version']=saved['version']
+                return result
         if real_provider:
             slot_acquired = _REAL_RUN_SLOT.acquire(blocking=False)
             if not slot_acquired:
                 rejection = "Another AI investigation is active; try again after it finishes"
-        conn.execute("BEGIN IMMEDIATE")
         if real_provider and not rejection:
             cutoff = (datetime.now(timezone.utc)-timedelta(hours=1)).isoformat()
             count = conn.execute("SELECT COUNT(*) FROM investigation_runs WHERE run_id LIKE 'real-%' AND started_at >= ?", (cutoff,)).fetchone()[0]
-            if count >= 3:
-                rejection = "This workspace has reached three AI attempts per hour; try again later"
+            if count >= bounded_setting('GROQ_WORKSPACE_HOURLY',3,6):
+                rejection = 'The workspace hourly AI limit is reached. Continue manual review and try later.'
         run_id = ("denied-" if rejection else "real-" if real_provider else "test-") + str(uuid.uuid4())
         conn.execute("INSERT INTO investigation_runs(run_id,case_id,actor_id,status,started_at) VALUES (?,?,?,?,?)", (run_id,case_id,actor.actor_id,"running",_now()))
+        if request_id:conn.execute('INSERT INTO investigation_submissions VALUES (?,?,?,?)',(actor.actor_id,request_id,snapshot,run_id))
         conn.commit()
         if rejection:
             raise ValueError(rejection)
@@ -160,22 +200,44 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
                   "Only find_photo_reuse accepts photo_id from timeline; get_vendor_context optionally accepts at_time. Other params empty.")
         messages = [{"role":"system","content":prompt}, {"role":"user","content":json.dumps({"case_id":case_id,"shipment_id":shipment_id,"partner_id":partner_id})}]
         available = set()
+        retries=0
         def generate(final=False):
+            nonlocal retries,slot_acquired
             remaining = TOTAL_TIME_BUDGET_S - (time.monotonic()-start)
             if remaining <= 0:
                 raise TimeoutError("Investigation time budget exhausted")
+            if result['request_count']>=6:raise UsageLimit('Investigation request budget exhausted. Continue manual review.')
+            encoded=json.dumps(messages)
+            if len(encoded)>20000:raise ValueError('Evidence exceeds the bounded AI context. Review the source records manually.')
+            if real_provider:reserve_request((len(encoded)+2)//3+(1024 if final else 512))
+            result['request_count']+=1
             replies = queue.Queue(maxsize=1)
+            state={'finished':False,'release_slot':False}
+            state_lock=threading.Lock()
             def request():
                 try:
-                    replies.put((True, provider.generate(list(messages), timeout=remaining, final=final)))
+                    replies.put((True, provider.generate(list(messages), timeout=min(20,remaining), final=final)))
                 except Exception as exc:
                     replies.put((False, exc))
+                finally:
+                    with state_lock:
+                        state['finished']=True
+                        if state['release_slot']:_REAL_RUN_SLOT.release()
             threading.Thread(target=request, daemon=True).start()
             try:
-                ok, raw = replies.get(timeout=remaining)
+                ok, raw = replies.get(timeout=min(20,remaining))
             except queue.Empty:
+                # The provider thread cannot be killed safely. Hold the real-run
+                # gate until it drains, preventing overlapping paid work or retries.
+                with state_lock:
+                    if slot_acquired and not state['finished']:
+                        state['release_slot']=True;slot_acquired=False
                 raise TimeoutError("Investigation time budget exhausted")
             if not ok:
+                transient=isinstance(raw,httpx.ConnectError) or (isinstance(raw,httpx.HTTPStatusError) and raw.response.status_code in (502,503,504))
+                if transient and retries<1:
+                    retries+=1
+                    return generate(final)
                 raise raw
             if time.monotonic()-start > TOTAL_TIME_BUDGET_S:
                 raise TimeoutError("Investigation time budget exhausted")
@@ -197,8 +259,10 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             result["tool_calls"].append(record)
             conn.execute("INSERT INTO tool_executions(tool_exec_id,case_id,run_id,tool_name,parameters_json,result_summary,evidence_ids_json,source,duration_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (str(uuid.uuid4()),case_id,run_id,record["tool"],json.dumps(record["params"]),record["result_summary"],json.dumps(record["evidence_ids"]),"agent",record["duration_ms"],_now()))
             conn.commit()
-            available.update(output["evidence_ids"])
-            messages.extend([{"role":"assistant","content":json.dumps(selected)}, {"role":"user","content":"Untrusted tool data: "+json.dumps(output["result"],default=str)}])
+            if output['result'].get('error'):raise ValueError('Invalid or unauthorized investigation tool request: '+_safe_error(output['result']['error']))
+            encoded,refs=_tool_message(output)
+            available.update(refs)
+            messages.extend([{"role":"assistant","content":json.dumps(selected)}, {"role":"user","content":"Untrusted tool data: "+encoded}])
         messages.append({"role":"user","content":"Tool phase finished. Generate ONLY the final report JSON following this schema: "+json.dumps(InvestigationReport.model_json_schema())+". Each fact needs retrieved evidence IDs. Valid IDs: "+json.dumps(sorted(available))})
         report = _validate_report(generate(final=True),case_id,available)
         authorize_case(conn,case_id,actor)
@@ -218,14 +282,24 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         result.update(status="completed",report=report,report_version=version)
     except Exception as exc:
         # Never include provider response bodies or secrets in diagnostics.
-        if isinstance(exc, (TimeoutError,httpx.TimeoutException)):
+        if isinstance(exc,ConfigurationError):
+            result['status']=exc.status;error=str(exc)
+        elif isinstance(exc,json.JSONDecodeError):
+            result['status']='invalid_output';error='Groq returned malformed JSON. No AI conclusion was saved; continue manual review.'
+        elif isinstance(exc,UsageLimit):
+            result['status']='usage_limited';error=str(exc)
+        elif isinstance(exc, (TimeoutError,httpx.TimeoutException)):
             result["status"] = "timeout"
             error = "Investigation time budget or provider timeout exhausted"
         elif isinstance(exc, httpx.ConnectError):
             result["status"] = "ai_not_running"
             error = "AI provider is unreachable"
         elif isinstance(exc, httpx.HTTPStatusError):
-            error = _provider_error(exc.response)
+            code=exc.response.status_code
+            if code==429:result['status']='rate_limited';error='Groq temporary usage limit reached. Continue manual review and try again later.'
+            elif code in (401,403):result['status']='authentication_failed';error='Groq rejected the credentials or project permissions. Check GROQ_API_KEY privately.'
+            elif code==404:result['status']='model_unavailable';error='The configured Groq model is unavailable. Check GROQ_MODEL; no alternative was called.'
+            else:error=_provider_error(exc.response)
         else:
             error = _safe_error(exc)
         if conn and run_id:

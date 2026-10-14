@@ -68,7 +68,7 @@ def test_provider_config_and_server_secret(monkeypatch):
     monkeypatch.setenv("PV_AI_PROVIDER","openai-compatible")
     monkeypatch.setenv("PV_AI_MODEL","configured-model")
     monkeypatch.setenv("PV_AI_BASE_URL","https://example.test/v1")
-    monkeypatch.setenv("PV_AI_API_KEY","server-only-secret")
+    monkeypatch.setenv("GROQ_API_KEY","server-only-secret")
     provider = ModelProvider()
     requests = []
     def handler(request):
@@ -77,7 +77,7 @@ def test_provider_config_and_server_secret(monkeypatch):
     client = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr("agent.runner.httpx.Client",lambda **kwargs:client)
     assert provider.generate([],1,True) == "{}"
-    assert requests[0].url.path == "/v1/chat/completions"
+    assert str(requests[0].url) == 'https://api.groq.com/openai/v1/chat/completions'
     assert requests[0].headers["Authorization"] == "Bearer server-only-secret"
     assert "server-only-secret" not in requests[0].content.decode()
 
@@ -118,7 +118,9 @@ def test_report_explicit_run_and_negative_disclaimer(seeded_db):
         assert run_id and conn.execute("SELECT status FROM investigation_runs WHERE run_id=?",(run_id,)).fetchone()[0] == "completed"
 
 
-def test_real_attempt_quota_and_test_provider_exemption(seeded_db,monkeypatch):
+def test_real_attempt_quota_and_test_provider_exemption(seeded_db,monkeypatch,tmp_path):
+    monkeypatch.setenv('PV_DATA_DIR',str(tmp_path))
+    monkeypatch.setattr('agent.runner.reserve_request',lambda tokens:None)
     case = _create_case_for_investigation(seeded_db)
     factories = []
     def factory():
@@ -131,7 +133,7 @@ def test_real_attempt_quota_and_test_provider_exemption(seeded_db,monkeypatch):
     rejected = investigate_case(seeded_db,case["case_id"],ADMIN_ACTOR)
     assert rejected["status"] == "error" and len(factories) == 3
     with get_connection(seeded_db) as conn:
-        assert "three AI attempts" in conn.execute("SELECT error FROM investigation_runs WHERE run_id LIKE 'denied-%'").fetchone()[0]
+        assert "workspace hourly AI limit" in conn.execute("SELECT error FROM investigation_runs WHERE run_id LIKE 'denied-%'").fetchone()[0]
     injected = ScriptedProvider([{"done":True},valid_report()])
     assert investigate_case(seeded_db,case["case_id"],ADMIN_ACTOR,provider=injected)["status"] == "completed"
 
@@ -161,9 +163,9 @@ def test_provider_errors_redact_secret_and_url(seeded_db,monkeypatch):
         assert "super-secret-token" not in error and "https://" not in error
 
 @pytest.mark.parametrize("final",[False,True])
-def test_gemini_provider_http_contract(monkeypatch,final):
+def test_groq_provider_http_contract(monkeypatch,final):
     monkeypatch.setenv("PV_AI_PROVIDER","gemini")
-    monkeypatch.setenv("GEMINI_API_KEY","gemini-server-secret")
+    monkeypatch.setenv("GROQ_API_KEY","groq-server-secret")
     monkeypatch.delenv("PV_AI_MODEL",raising=False)
     monkeypatch.delenv("PV_AI_BASE_URL",raising=False)
     provider = ModelProvider()
@@ -176,23 +178,23 @@ def test_gemini_provider_http_contract(monkeypatch,final):
     monkeypatch.setattr("agent.runner.httpx.Client",lambda **kwargs:client)
     assert json.loads(provider.generate([],1,final=final)) == response_json
     request = requests[0]
-    assert str(request.url) == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    assert request.headers["Authorization"] == "Bearer gemini-server-secret"
+    assert str(request.url) == 'https://api.groq.com/openai/v1/chat/completions'
+    assert request.headers["Authorization"] == "Bearer groq-server-secret"
     payload = json.loads(request.content)
-    assert payload["model"] == "gemini-3.5-flash-lite"
+    assert payload["model"] == 'openai/gpt-oss-20b'
     assert payload["response_format"]["type"] == ("json_schema" if final else "json_object")
     if final:
         assert payload["response_format"]["json_schema"]["schema"]["properties"]["verdict"]
-    assert "gemini-server-secret" not in request.content.decode()
+    assert "groq-server-secret" not in request.content.decode()
 
 
-def test_gemini_requires_secure_key_and_model_override(monkeypatch):
+def test_groq_requires_secure_key_and_model_override(monkeypatch):
     monkeypatch.setenv("PV_AI_PROVIDER","gemini")
-    monkeypatch.delenv("GEMINI_API_KEY",raising=False)
-    with pytest.raises(ValueError,match="GEMINI_API_KEY"):
+    monkeypatch.delenv("GROQ_API_KEY",raising=False)
+    with pytest.raises(ValueError,match="GROQ_API_KEY"):
         ModelProvider()
-    monkeypatch.setenv("GEMINI_API_KEY","secure-key")
-    monkeypatch.setenv("PV_AI_MODEL","override-model")
+    monkeypatch.setenv("GROQ_API_KEY","secure-key")
+    monkeypatch.setenv("GROQ_MODEL","override-model")
     assert ModelProvider().model_name == "override-model"
     from agent.runner import _safe_error
     assert "secure-key" not in _safe_error("provider failed: secure-key")

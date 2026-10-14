@@ -17,7 +17,8 @@ from services.handoff import compare_handoff
 from services.review import list_review_cases, review_counts, record_review_decision
 from services.risk import get_partner_metrics
 from services.workflow import submit_handoff
-from ui.live import context, rows, shipments, display_photo
+from ui.live import context, rows, shipments, display_photo, ai_request_token, run_case_ai, ai_failure_message
+from agent.configuration import provider_settings
 from ui.presentation import (MYT, ACTION_LABELS, MISSING_LABELS, format_time, format_weight,
     difference_weight, status_label, stage_label, status_badge, issue_label, humanize)
 
@@ -266,10 +267,14 @@ def ai_summary(case):
             with st.expander("Other explanations to consider"):
                 for item in report["alternative_explanations"]: st.write(item)
         st.markdown("**Suggested next step**"); st.write(ACTION_LABELS.get(report["recommended_action"],report["recommended_action"]))
-    configured=bool(os.environ.get("GEMINI_API_KEY")) if os.environ.get("PV_AI_PROVIDER","gemini")=="gemini" else True
-    if actor["role"] in ("admin","investigator") and st.button("Retry AI explanation" if runs and not report else "Explain this issue with AI",disabled=not configured,key="ai-"+case["case_id"]):
-        with st.spinner("Reviewing the recorded evidence..."): result=investigate_case(path,case["case_id"],actor)
-        notice("AI explanation saved. Review it before deciding." if result["status"]=="completed" else "AI explanation is unavailable. You can still review the evidence.","success" if result["status"]=="completed" else "info"); st.rerun()
+    token=ai_request_token(case["case_id"])
+    settings=provider_settings()
+    configured=settings['configured'] and settings['enabled']
+    if not configured:
+        st.info('Groq AI is unavailable. Configure GROQ_API_KEY and AI_PROVIDER=groq in server settings. Manual review remains available.')
+    if actor["role"] in ("admin","investigator") and st.button("Retry AI explanation" if runs and not report else "Explain this issue with AI",disabled=not configured,key="ai-"+case['case_id']+'-'+token):
+        with st.spinner("Reviewing the recorded evidence..."): result=run_case_ai(path,case["case_id"],actor,token)
+        notice("AI explanation saved. Review it before deciding." if result["status"]=="completed" else ai_failure_message(result),"success" if result["status"]=="completed" else "info"); st.rerun()
     st.caption("Flags need review. They do not prove wrongdoing.")
     if not reports and not runs:st.caption('Not checked yet')
     elif runs and not report:st.caption('Could not complete the check. Manual review remains available.')

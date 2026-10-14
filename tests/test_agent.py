@@ -210,7 +210,7 @@ class TestInvestigateCase:
     def test_model_unavailable_preserves_status_and_run(self, seeded_db):
         import httpx
         case = _create_case_for_investigation(seeded_db)
-        provider = ScriptedProvider([httpx.ConnectError("offline")])
+        provider = ScriptedProvider([httpx.ConnectError("offline")]*2)
         result = investigate_case(seeded_db,case["case_id"],ADMIN_ACTOR,provider=provider)
         assert result["status"] == "ai_not_running"
         assert result["report"] is None
