@@ -27,6 +27,6 @@ def loaded_source_status():
                 value=inspect.unwrap(value) if value else None
                 actual=getattr(value,'__code__',None)
                 if actual is None or signature(actual)!=signature(code):
-                    stale.append(name);break
+                    stale.append(name+' ('+code.co_name+')');break
         except (OSError,SyntaxError,ValueError):stale.append(name)
     return sorted(set(stale))
