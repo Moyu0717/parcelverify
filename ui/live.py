@@ -206,6 +206,11 @@ def ai_request_token(case_id):
 
 def ai_failure_message(result):
     error = str(result.get('error') or '').lower()
+    statuses={'authentication_failed':'Groq rejected the credentials or permissions. Check private configuration; manual review remains available.',
+              'invalid_output':'AI returned an invalid result. No conclusion was saved; review the evidence manually.',
+              'rate_limited':'Groq has reached a temporary usage limit. Review evidence manually or try later.',
+              'usage_limited':'The demo AI usage limit is reached. Review evidence manually or try later.'}
+    if result.get('status') in statuses:return statuses[result['status']]
     if result.get('status') == 'config_disabled':
         return 'AI is disabled by server configuration. Manual review remains available.'
     if result.get('status') in ('missing_config', 'missing_configuration'):
