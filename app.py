@@ -39,6 +39,12 @@ def settings():
     active_dataset = dataset_version(st.session_state.db_path)
     with st.expander("Build information"):
         for label, value in build_information().items(): st.write(f"{label}: {value}")
+        from runtime_identity import loaded_source_status
+        stale=loaded_source_status()
+        if stale:
+            st.warning("Loaded Python modules differ from the checked-out source. The owner must use Manage app → Reboot app before this build can be verified.")
+            st.caption("Modules requiring refresh: "+', '.join(stale))
+        else: st.caption("Loaded Python functions match the checked-out source.")
         st.write(f"Active demo dataset: {active_dataset}")
         st.caption("Schema migration: case-workflow-v1. Dataset versions describe seeded records, not schema migrations.")
     if active_dataset != DATASET_VERSION:
