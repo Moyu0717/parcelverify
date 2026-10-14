@@ -1,5 +1,6 @@
 """Compare loaded Python functions with source without executing source or reloading state."""
 import inspect
+import ast
 import sys
 import types
 from pathlib import Path
@@ -19,9 +20,13 @@ def loaded_source_status():
         path=Path(filename)
         if ROOT not in path.parents or path.suffix!='.py':continue
         try:
-            expected=compile(path.read_text(encoding='utf-8-sig'),str(path),'exec')
+            source=path.read_text(encoding='utf-8-sig')
+            declared={node.name for node in ast.walk(ast.parse(source)) if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
+            expected=compile(source,str(path),'exec')
             for code in expected.co_consts:
-                if not isinstance(code,types.CodeType) or code.co_name.startswith('<'):continue
+                # Python 3.14 emits separate 'annotate' code objects. They are
+                # compiler helpers, not missing module-level application functions.
+                if not isinstance(code,types.CodeType) or code.co_name not in declared:continue
                 value=getattr(module,code.co_name,None)
                 if isinstance(value,type):continue
                 value=inspect.unwrap(value) if value else None
