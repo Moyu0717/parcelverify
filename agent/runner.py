@@ -62,6 +62,8 @@ class ModelProvider:
         self.model_name = config['model']
         if not self.model_name:
             raise ConfigurationError('GROQ_MODEL is required','missing_configuration')
+        if 'compound' in self.model_name.lower():
+            raise ConfigurationError('Provider-hosted agent systems are disabled. Choose a Groq text model with local tool selection.','model_unavailable')
         self.api_key = os.getenv('GROQ_API_KEY','').strip()
         if not self.api_key:raise ConfigurationError('GROQ_API_KEY is missing. Configure it privately; manual review remains available.','missing_configuration')
 

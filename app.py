@@ -102,7 +102,7 @@ def help_page():
     st.write("1. Open an issue from Home, or find a shipment by its reference in Issues.")
     st.write("2. Check the concern and its evidence. Missing information is not a mismatch.")
     st.write("3. Submit the next step for approval, or record an authorized review decision.")
-    st.info("AI explanation is unavailable. You can still review the evidence.")
+    st.info("Groq explanations are optional. Review the evidence and use the human approval workflow when AI is unavailable.")
     st.caption("Operational actions and identities are simulated. Demonstration images are not verified parcel photographs. Flags need review; they do not prove wrongdoing.")
 
 def main():

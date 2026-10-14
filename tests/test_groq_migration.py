@@ -40,6 +40,10 @@ def test_secrets_precedence_and_other_keys_ignored(monkeypatch):
     load_server_configuration({'GROQ_MODEL':'secret-model','PV_AI_PROVIDER':'gemini'})
     assert provider_settings()['model']=='secret-model' and provider_settings()['provider']=='groq'
 
+def test_hosted_agent_model_cannot_enable_browser_or_code_tools(monkeypatch):
+    monkeypatch.setenv('GROQ_MODEL','groq/compound')
+    with pytest.raises(ValueError,match='hosted agent systems are disabled'):ModelProvider()
+
 def test_groq_transport_is_fixed_bounded_and_no_hosted_tools(monkeypatch):
     monkeypatch.setenv('GROQ_API_KEY','private-test-value');monkeypatch.setenv('PV_AI_BASE_URL','https://paid.invalid')
     seen=[]
