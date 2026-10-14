@@ -41,4 +41,6 @@ def ai_configuration():
     model = os.getenv('PV_AI_MODEL', 'gemini-3.5-flash-lite' if provider == 'gemini' else 'qwen3:4b' if provider == 'ollama' else '')
     field = 'GEMINI_API_KEY' if provider == 'gemini' else 'PV_AI_API_KEY'
     configured = bool(os.getenv(field)) if provider != 'ollama' else True
-    return {'Provider': provider, 'Model': model or 'Not set', 'Credentials': 'Configured (not validated)' if configured else f'Missing {field}', 'Execution': 'Not yet verified; see recent runs below.'}
+    endpoint = os.getenv('PV_AI_BASE_URL', '').rstrip('/')
+    endpoint_status = 'Official Google endpoint' if provider == 'gemini' and endpoint in ('', 'https://generativelanguage.googleapis.com/v1beta/openai') else 'Default provider endpoint' if not endpoint else 'Custom override; check PV_AI_BASE_URL in server configuration'
+    return {'Provider': provider, 'Model': model or 'Not set', 'Endpoint': endpoint_status, 'Credentials': 'Configured (not validated)' if configured else f'Missing {field}', 'Execution': 'Not yet verified; see recent runs below.'}

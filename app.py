@@ -77,7 +77,10 @@ def settings():
         with st.expander("AI connection diagnostics"):
             for label, value in ai_configuration().items(): st.write(f"{label}: {value}")
             st.caption("Configure credentials in Streamlit Secrets. A configured credential is not proof of a successful investigation. Failed runs remain failures; insufficient evidence is a completed report verdict.")
-            st.dataframe(rows("SELECT status,model_name,error,started_at FROM investigation_runs ORDER BY started_at DESC LIMIT 10"),hide_index=True)
+            recent = rows("SELECT status,model_name,error,started_at FROM investigation_runs ORDER BY started_at DESC LIMIT 10")
+            if recent: st.caption("Latest run: "+recent[0]['status']+(' · '+recent[0]['error'] if recent[0].get('error') else ''))
+            else: st.caption("No investigation has been run in this workspace.")
+            st.dataframe(recent,hide_index=True)
             if st.session_state.get("technical_error"): st.code(st.session_state.technical_error)
 
 def help_page():

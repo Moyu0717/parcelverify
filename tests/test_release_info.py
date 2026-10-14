@@ -10,6 +10,9 @@ def test_source_identity_and_credentials_are_safe(monkeypatch):
     monkeypatch.delenv('GEMINI_API_KEY')
     assert result['Provider'] == 'gemini'
     assert ai_configuration()['Credentials'] == 'Missing GEMINI_API_KEY'
+    monkeypatch.setenv('PV_AI_BASE_URL','https://private.example/secret')
+    assert 'private.example' not in str(ai_configuration())
+    assert ai_configuration()['Endpoint'].startswith('Custom override')
     assert len(build_information()['Source build']) == 16
 
 def test_legacy_records_are_not_relabelled(tmp_path):
