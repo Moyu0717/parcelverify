@@ -17,3 +17,13 @@ Local setup: privately copy .streamlit/secrets.example.toml to .streamlit/secret
 Keep the account on Free Plan; the application cannot verify billing status. Removing old Google secrets does not revoke their keys, cancel existing debts or stop unrelated resources. No cloud account/billing settings were changed.
 
 Publication and actual public diagnostics must be checked independently. Real AI acceptance remains pending until one small synthetic investigation retrieves authorized tools and persists a validated conclusion.
+
+## Actual public verification
+
+Native GitHub publication succeeded on Moyu0717/parcelverify main, commit 4e3656532ccab5e299a24f31813933068519d946, preserving the parent tree with an expected-head lease. No local .git exists; local source was submitted through the established native integration.
+
+Independent public HTTPS inspection observed release groq-free-20261015.1, source fingerprint 02425f4e886f3c04, the same checkout commit and matching loaded functions. Provider is groq, model openai/gpt-oss-20b, official Groq endpoint, dataset linked-cases-v5, additive schema marker case-workflow-v2-groq. Original linked findings, replacement photographs, reviewers and manual actions remain visible.
+
+Hosted GROQ_API_KEY is missing. The AI button is disabled and the UI explicitly permits manual review. No Groq or Gemini request was made during this inspection. Real Groq smoke acceptance is pending one private key configuration step; mocked success is not claimed as live inference.
+
+After migration, the full public manual workflow also passed on a separate synthetic visitor workspace: request approval, one task, one submission, acceptance, unresolved closure and audit download. The audit retains all six operations and no investigation was run. Artifacts are retained under qa/artifacts/groq-migration.

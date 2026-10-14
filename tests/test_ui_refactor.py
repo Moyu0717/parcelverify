@@ -11,11 +11,12 @@ from services.cases import list_cases as list_review_cases
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, 'DATA_ROOT', tmp_path)
-    monkeypatch.setenv('PV_AI_PROVIDER', 'gemini')
-    monkeypatch.delenv('GEMINI_API_KEY', raising=False)
+    monkeypatch.setenv('AI_PROVIDER', 'groq')
+    monkeypatch.delenv('GROQ_API_KEY', raising=False)
     def forbidden(*args, **kwargs):
         raise AssertionError('UI acceptance must not call AI')
     monkeypatch.setattr('ui.workspace_ui.investigate_case', forbidden)
+    monkeypatch.setattr('ui.live.investigate_case', forbidden)
     test = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=30).run()
     assert not test.exception
     assert not test.error
