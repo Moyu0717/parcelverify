@@ -13,7 +13,10 @@ from contracts import ActorContext, AuthorizationError
 from services.cases import permitted_evidence
 from db import get_connection
 
-NAMES={'ADMIN-001':'Alex Chen · Demo administrator','INVESTIGATOR-001':'Mira Patel · Investigator','APPROVER-001':'Nora Lee · Supervisor','ACTOR-QR-01':'Sam Tan · QuickRun','ACTOR-SL-01':'Robin Lim · SafeLog','ACTOR-ML-01':'Avery Teo · MetroLine'}
+def account_label(actor_id):
+    # No display-name directory is configured. Do not infer a person's name.
+    return 'Account'
+
 
 def source_label(eid):
     event=rows('SELECT shipment_id,event_type,occurred_at FROM events WHERE event_id=?',(eid,))
@@ -42,23 +45,30 @@ def source_view(eid):
 def linked_evidence(case,details=False):
     path,actor=context();ctx=get_case_context(path,case['case_id'],actor)
     if not details:
-        st.subheader('What we know')
+        labels={'weight_diff':'Weight changed','photo_reuse':'Photo used on another shipment','access_anomaly':'Access request blocked','authorized_export':'Authorized export recorded','count_discrepancy':'Package quantity changed','seal_mismatch':'Seal information differs','id_conflict':'Shipment information differs','time_conflict':'Recorded timing needs review'}
         categories=list(dict.fromkeys(f['category'] for f in ctx['findings']))
-        st.write(' · '.join(humanize(category) for category in categories) or 'Evidence is incomplete')
-        st.caption(f"{len(ctx['findings'])} identifiable findings across {len(ctx['shipment_ids'])} permitted shipments. Each retains its own review outcome.")
+        st.write(' · '.join(labels.get(category,'Recorded evidence needs checking') for category in categories) or 'Evidence is incomplete')
         if not ctx['findings']:st.info('Measurements or confirmation are missing. No supported discrepancy has been established.')
         return
-    for member in ctx['cases']:
-        if not (member['triggering_event_id'] or '').startswith('access:'):continue
-        st.subheader('Related account activity')
+    members=[member for member in ctx['cases'] if (member['triggering_event_id'] or '').startswith('access:')]
+    if members:
+        st.subheader('Account activity')
+        if case['issue_type']!='access':
+            st.caption('These account records concern the same shipment. Each finding has its own outcome; this link does not establish cause or intent.')
+    for member in members:
         ids={i for f in member['findings'] for i in f.get('evidence_ids',[])}
         logs=[r for r in rows('SELECT l.*,p.name requesting_partner FROM access_logs l LEFT JOIN partners p ON l.partner_id=p.partner_id WHERE l.shipment_id=?',(member['shipment_id'],)) if r['log_id'] in ids]
-        for log in logs[:1]:
-            st.write('**'+NAMES.get(log['actor_id'],log['actor_id'])+'** · '+(log['requesting_partner'] or 'Partner not recorded'))
-            st.caption(log['action']+' · '+member['shipment_id']+' · '+log['outcome']+' · '+format_time(log['occurred_at']))
-        st.caption('Assignment owners are independent of the requesting account.')
-        for assignment in rows('SELECT a.actor_id,p.name assigned_partner FROM assignments a LEFT JOIN partners p ON a.partner_id=p.partner_id WHERE a.shipment_id=?',(member['shipment_id'],)):
-            st.caption('Assigned account: '+NAMES.get(assignment['actor_id'],assignment['actor_id'])+' · '+(assignment['assigned_partner'] or 'Not recorded'))
+        for log in logs:
+            st.write('**Account** · '+(log['requesting_partner'] or 'Partner not recorded'))
+            result='Access request blocked' if log['outcome']=='denied' else 'Authorized activity' if log['outcome'] in ('allowed','authorized','granted') else humanize(log['outcome'])
+            st.write(result+' · '+member['shipment_id'])
+            st.caption(format_time(log['occurred_at']))
+        assignments=rows('SELECT a.actor_id,p.name assigned_partner FROM assignments a LEFT JOIN partners p ON a.partner_id=p.partner_id WHERE a.shipment_id=?',(member['shipment_id'],))
+        for assignment in assignments:
+            st.caption('Assigned account · '+(assignment['assigned_partner'] or 'Partner not recorded'))
+        with st.expander('Account identifiers and source details · '+member['case_id'][:6].upper()):
+            for log in logs:st.write('Requesting account: '+log['actor_id']+' · '+log['action']+' · '+log['outcome'])
+            for assignment in assignments:st.write('Assigned account: '+assignment['actor_id'])
     photo_ids=list(dict.fromkeys(i for f in ctx['findings'] if f['category']=='photo_reuse' for i in f['evidence_ids']))
     if photo_ids:
         st.caption('Linked photo match available below the shipment comparison.')
@@ -80,9 +90,13 @@ def photo_comparison(case):
                 if st.button('Enlarge photo',key='linked-enlarge-'+pid,icon=':material/zoom_in:'):
                     from ui.workspace_ui import enlarge
                     enlarge(photo)
-        st.caption('Exact file equality: the stored file bytes are identical. This establishes reuse, not intent or parcel contents.')
+        if matches:
+            st.write('The same photo file appears on both shipment records')
+            st.caption('Identical file bytes establish reuse, not intent or parcel contents.')
         near=[m for m in result['similar_candidates'] if m['photo_id']!='[masked]' and m['photo_id'] not in chosen]
-        if near:st.caption(f'{len(near)} permitted near-image candidates need manual comparison; visual similarity is not exact file equality.')
+        with st.expander('Photo matching details'):
+            st.caption(f'{len(near)} permitted near-image candidates need manual comparison; visual similarity is not exact file equality.')
+            st.caption('Exact matches compare file bytes. Candidate counts are not confirmed problems.')
 
 def next_step(case):
     from ui import workspace_ui as work
@@ -104,7 +118,7 @@ def next_step(case):
         for task in live:
             st.write('**'+humanize(task['task_type'])+' · '+humanize(task['status'])+'**')
             st.caption(task['description'] or 'Supply the requested context.')
-            st.caption('Shipment '+task['shipment_id']+' · '+('assigned partner or operations submits' if task['status']=='open' else 'Mira Patel or Nora Lee reviews'))
+            st.caption('Shipment '+task['shipment_id']+' · '+('assigned partner or operations submits' if task['status']=='open' else 'an investigator or supervisor reviews'))
             if task['status']=='open' and actor['role'] in ('admin','investigator','partner_user'):
                 with st.expander('Supply evidence',expanded=actor['role']=='partner_user'):
                     with st.form('response-'+task['task_id']):
@@ -134,7 +148,7 @@ def next_step(case):
                         except (ValueError,ArithmeticError) as error:st.error(str(error))
             if task['status']=='received' and actor['role'] in ('admin','investigator','approver'):
                 submission=rows("SELECT s.*,e.payload_json FROM task_submissions s JOIN events e ON s.event_id=e.event_id WHERE s.task_id=? AND s.review_status='pending' ORDER BY s.created_at DESC",(task['task_id'],))[0]
-                st.write('Submitted by '+NAMES.get(submission['actor_id'],submission['actor_id'])+' · '+format_time(submission['created_at']))
+                st.write('Submitted by '+account_label(submission['actor_id'])+' · '+format_time(submission['created_at']))
                 payload=json.loads(submission['payload_json'])
                 if payload.get('weight_g') is not None:st.write(f"Recorded weight: {payload['weight_g']/1000:.3f} kg")
                 st.write(payload.get('notes',''))
@@ -155,7 +169,7 @@ def next_step(case):
             evidence=sorted({i for f in ctx['findings'] for i in f['evidence_ids']}|{r['event_id'] for sid in ctx['shipment_ids'] for r in rows('SELECT event_id FROM events WHERE shipment_id=?',(sid,))})
             for f in ctx['findings']:
                 with st.form('finding-review-'+f['finding_id']):
-                    st.write('**'+humanize(f['category'])+'**: '+f['description'])
+                    st.write('**'+{'weight_diff':'Weight changed','photo_reuse':'Photo used on another shipment','access_anomaly':'Access request blocked','authorized_export':'Authorized export recorded'}.get(f['category'],'Recorded evidence')+'**: '+f['description'])
                     outcome=st.selectbox('Finding outcome',['unresolved','supported','resolved'])
                     refs=st.multiselect('Supporting sources',evidence,format_func=source_label)
                     why=st.text_area('Finding review reason')

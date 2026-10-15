@@ -236,55 +236,52 @@ def access_evidence(case):
         for event in batches: st.write("Approved batch work recorded · "+format_time(event["occurred_at"]))
 
 def ai_summary(case):
+    from services.ai_state import case_ai_state
     path,actor=context()
     if actor["role"]=="partner_user":
-        st.caption("AI summaries are available to internal reviewers. You can still view the shipment evidence."); return
-    reports=rows("SELECT * FROM report_versions WHERE case_id=? ORDER BY version DESC",(case["case_id"],))
-    runs=rows("SELECT run_id,status,error,model_name,started_at FROM investigation_runs WHERE case_id=? ORDER BY started_at DESC",(case["case_id"],))
-    report=None
-    if reports:
-        from agent.runner import validate_saved_report
-        try:report=validate_saved_report(path,reports[0],actor)
-        except ValueError:st.warning('An earlier AI report cannot be shown because its sources no longer pass validation. Review the evidence manually or run a new check.')
-    if not report: st.info("AI explanation is unavailable. You can still review the evidence.")
-    else:
-        st.success({'consistent':'Evidence is consistent','requires_review':'Human review needed','needs_review':'Human review needed','insufficient_evidence':'More evidence needed'}[report['verdict']])
-        if any(member.get('created_at','')>reports[0]['created_at'] for member in case.get('member_cases',[])) or any(rows("SELECT event_id FROM events WHERE shipment_id=? AND julianday(received_at)>julianday(?)",(sid,reports[0]["created_at"])) for sid in case.get('shipment_ids',[case['shipment_id']])):
-            st.warning("New evidence has been added since this summary. Review it manually or request an updated summary.")
-        st.markdown("**What we found**"); st.write(report["summary"])
-        source={e["event_id"]:index+1 for index,e in enumerate(events(case["shipment_id"]))}
-        for fact_index,fact in enumerate(report["facts"]):
-            st.write(fact["text"])
-            if fact["evidence_ids"]:
-                with st.expander("Supporting evidence"):
-                    for identifier in fact["evidence_ids"]:
-                        from ui.case_workflow import source_label,source_view
-                        if st.button(source_label(identifier),key='report-source-'+str(fact_index)+'-'+identifier):source_view(identifier)
-        st.markdown("**What is missing**")
-        for item in report["missing_evidence"]: st.write("• "+item)
-        if not report["missing_evidence"]: st.caption("No further gaps were listed by this review.")
-        if report.get("alternative_explanations"):
-            with st.expander("Other explanations to consider"):
-                for item in report["alternative_explanations"]: st.write(item)
-        st.markdown("**Suggested next step**"); st.write(ACTION_LABELS.get(report["recommended_action"],report["recommended_action"]))
-    token=ai_request_token(case["case_id"])
-    settings=provider_settings()
-    configured=settings['configured'] and settings['enabled']
-    if not configured:
-        st.info('Groq AI is unavailable. Configure GROQ_API_KEY and AI_PROVIDER=groq in server settings. Manual review remains available.')
-    if actor["role"] in ("admin","investigator") and st.button("Retry AI explanation" if runs and not report else "Explain this issue with AI",disabled=not configured,key="ai-"+case['case_id']+'-'+token):
-        with st.spinner("Reviewing the recorded evidence..."): result=run_case_ai(path,case["case_id"],actor,token)
-        notice("AI explanation saved. Review it before deciding." if result["status"]=="completed" else ai_failure_message(result),"success" if result["status"]=="completed" else "info"); st.rerun()
-    st.caption("Flags need review. They do not prove wrongdoing.")
-    if not reports and not runs:st.caption('Not checked yet')
-    elif runs and not report:st.caption('Could not complete the check. Manual review remains available.')
-    with st.expander("Technical details"):
-        if reports: st.caption("Provider model: "+str(reports[0]["model_name"]))
-        if actor["role"]=="admin" and runs and runs[0].get("error"): st.code(runs[0]["error"])
-        trace=rows("SELECT tool_name,result_summary,evidence_ids_json FROM tool_executions WHERE case_id=?",(case["case_id"],))
-        visible_runs=runs if actor["role"]=="admin" else [{key:value for key,value in run.items() if key!="error"} for run in runs]
-        st.json({"runs":visible_runs,"tools":trace})
-        st.download_button("Download technical review record",json.dumps({"runs":visible_runs,"tools":trace},indent=2),file_name="parcelverify-review-record.json")
+        st.caption("AI reviews are available to internal reviewers. You can still review the evidence.")
+        return
+    state=case_ai_state(path,case["case_id"],actor)
+    report=state['report']
+    level='success' if state['state']=='completed' else 'info'
+    getattr(st,level)(state['message'])
+    if state['retry_at']:st.caption('Available after '+format_time(state['retry_at']))
+    if state['reference'] and state['state'] not in ('not_started','completed','outdated'):
+        st.caption('Review reference: '+state['reference'][-8:])
+    if report:
+        record=state['report_record']
+        st.caption(('Previous saved review' if state['previous_report'] else 'Saved review')+' · '+format_time(record['created_at'])+(' · earlier records' if state['report_outdated'] else ''))
+        st.write({'consistent':'Evidence is consistent','requires_review':'Human review is needed','needs_review':'Human review is needed','insufficient_evidence':'More evidence is needed'}[report['verdict']])
+        st.write(report['summary'])
+        with st.expander('Review conclusion and sources'):
+            for fact_index,fact in enumerate(report['facts']):
+                st.write(fact['text'])
+                for identifier in fact['evidence_ids']:
+                    from ui.case_workflow import source_label,source_view
+                    if st.button(source_label(identifier),key='report-source-'+str(fact_index)+'-'+identifier):source_view(identifier)
+            if report['missing_evidence']:
+                st.markdown('**What is missing**')
+                for item in report['missing_evidence']:st.write('• '+item)
+            for item in report.get('alternative_explanations',[]):st.write(item)
+            st.write('Suggested step: '+ACTION_LABELS.get(report['recommended_action'],report['recommended_action']))
+            st.caption('Text records only. AI does not inspect photographs or approve actions.')
+    token=ai_request_token(case['case_id'])
+    if actor['role'] in ('admin','investigator') and st.button(state['action'],disabled=not state['can_run'],key='ai-'+case['case_id']+'-'+token):
+        with st.spinner('Reviewing the available evidence…'):
+            run_case_ai(path,case['case_id'],actor,token)
+        st.rerun()
+    if state['state']=='running' and st.button('Refresh review status'):
+        st.rerun()
+    if actor['role']=='admin':
+        with st.expander('AI review diagnostics'):
+            st.caption('Provider: Groq · Selected model: '+provider_settings()['model'])
+            st.write('Last provider outcome: '+state['provider_outcome'])
+            if state['run']:
+                st.json({key:state['run'].get(key) for key in ('run_id','status','model_name','error','started_at','finished_at')})
+                st.json(state['diagnostics'])
+            trace=rows('SELECT tool_name,result_summary,evidence_ids_json FROM tool_executions WHERE run_id=?',(state['reference'],)) if state['reference'] else []
+            st.download_button('Download AI diagnostic record',json.dumps({'run':state['run'],'tools':trace},indent=2),file_name='parcelverify-ai-diagnostic.json')
+            if trace:st.json(trace)
 
 def next_step(case,show_review=True):
     path,actor=context()

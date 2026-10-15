@@ -80,6 +80,9 @@ def init_db(db_path: str = "data/parcelverify.db") -> None:
         columns = {r[1] for r in conn.execute("PRAGMA table_info(report_versions)")}
         if "run_id" not in columns:
             conn.execute("ALTER TABLE report_versions ADD COLUMN run_id TEXT REFERENCES investigation_runs(run_id)")
+        columns = {r[1] for r in conn.execute('PRAGMA table_info(investigation_runs)')}
+        for name in ('diagnostics_json','snapshot'):
+            if name not in columns:conn.execute('ALTER TABLE investigation_runs ADD COLUMN '+name+' TEXT')
         conn.commit()
     finally:
         conn.close()

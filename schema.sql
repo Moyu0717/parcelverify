@@ -226,7 +226,9 @@ CREATE TABLE IF NOT EXISTS investigation_runs (
   model_name TEXT,
   error TEXT,
   started_at TEXT NOT NULL,
-  finished_at TEXT
+    finished_at TEXT,
+    diagnostics_json TEXT,
+    snapshot TEXT
 );
 CREATE TABLE IF NOT EXISTS tool_executions (
   tool_exec_id TEXT PRIMARY KEY,

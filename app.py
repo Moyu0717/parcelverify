@@ -53,7 +53,7 @@ def settings():
             st.caption("Modules requiring refresh: "+', '.join(stale))
         else: st.caption("Loaded Python functions match the checked-out source.")
         st.write(f"Active demo dataset: {active_dataset}")
-        st.caption("Schema migration: case-workflow-v2-groq. Dataset versions describe seeded records, not schema migrations.")
+        st.caption("Schema migration: case-workflow-v3-ai-state. Dataset versions describe seeded records, not schema migrations.")
     if active_dataset != DATASET_VERSION:
         st.warning("This workspace retains older or unversioned demo records. Save its recovery token before opening a separate current demo. Your existing records will remain available within the retention period.")
     with st.expander("Demo tools"):
@@ -88,18 +88,26 @@ def settings():
         with st.expander("Administrative logs"):
             st.dataframe(rows("SELECT actor_id,shipment_id,occurred_at,outcome FROM access_logs ORDER BY occurred_at DESC LIMIT 100"),hide_index=True,use_container_width=True)
         with st.expander("AI connection diagnostics"):
-            for label, value in ai_configuration().items(): st.write(f"{label}: {value}")
-            st.caption("Configure credentials in Streamlit Secrets. A configured credential is not proof of a successful investigation. Failed runs remain failures; insufficient evidence is a completed report verdict.")
-            recent = rows("SELECT status,model_name,error,started_at FROM investigation_runs ORDER BY started_at DESC LIMIT 10")
-            if recent: st.caption("Latest run: "+recent[0]['status']+(' · '+recent[0]['error'] if recent[0].get('error') else ''))
-            else: st.caption("No investigation has been run in this workspace.")
-            st.dataframe(recent,hide_index=True)
+            from services.ai_state import case_ai_state,derive_ai_state
+            from agent.configuration import provider_settings
+            config=provider_settings()
+            st.write('Provider: '+config['provider']+' · Model: '+config['model'])
+            st.caption(('Credential present; not proof of a working connection.' if config['configured'] else 'Credential missing.')+' Execution policy: '+('enabled' if config['enabled'] else 'disabled')+'.')
+            latest=rows('SELECT case_id FROM investigation_runs ORDER BY started_at DESC,rowid DESC LIMIT 1')
+            selected=st.session_state.get('selected_case_id') or (latest[0]['case_id'] if latest else None)
+            state=case_ai_state(st.session_state.db_path,selected,st.session_state.actor_context) if selected else derive_ai_state(config)
+            st.info(state['message'])
+            if selected:st.caption('Review status for the selected or most recent case; it does not describe every case.')
+            st.write('Last provider outcome: '+state['provider_outcome'])
+            if state.get('run'):
+                st.json({key:state['run'].get(key) for key in ('run_id','status','model_name','error','started_at','finished_at')})
+                st.json(state['diagnostics'])
             if st.session_state.get("technical_error"): st.code(st.session_state.technical_error)
 
 def help_page():
     st.title("Help")
     st.subheader("A simple review loop")
-    st.write("1. Open an issue from Home, or find a shipment by its reference in Issues.")
+    st.write("1. Open a case from Home, or find a shipment by its reference in Cases.")
     st.write("2. Check the concern and its evidence. Missing information is not a mismatch.")
     st.write("3. Submit the next step for approval, or record an authorized review decision.")
     st.info("Groq explanations are optional. Review the evidence and use the human approval workflow when AI is unavailable.")
@@ -118,10 +126,10 @@ def main():
             token,path=open_workspace()
             st.session_state.workspace_token,st.session_state.db_path=token,path
     Path(st.session_state.db_path).parent.joinpath(".activity").touch()
-    if st.session_state.get('schema_revision')!='case-workflow-v2-groq':
+    if st.session_state.get('schema_revision')!='case-workflow-v3-ai-state':
         from db import init_db
         init_db(st.session_state.db_path)
-        st.session_state.schema_revision='case-workflow-v2-groq'
+        st.session_state.schema_revision='case-workflow-v3-ai-state'
     role=st.session_state.setdefault("actor_role","admin")
     partner=st.session_state.setdefault("actor_partner","P-QUICKRUN") if role=="partner_user" else None
     actor_id={"P-QUICKRUN":"ACTOR-QR-01","P-SAFELOG":"ACTOR-SL-01","P-METROLINE":"ACTOR-ML-01"}.get(partner,f"{role.upper()}-001")

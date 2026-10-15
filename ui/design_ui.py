@@ -1,5 +1,4 @@
 """Reference-led presentation over the existing authorized review services."""
-import base64
 import json
 from datetime import datetime, timezone
 from html import escape as esc
@@ -11,7 +10,6 @@ from ui.live import context, rows, shipments, display_photo
 from ui.presentation import format_time, format_weight, difference_weight, stage_label, humanize, status_badge
 from services.handoff import compare_handoff
 from services.review import review_counts
-from services.access import check_access_scope
 from ui.case_workflow import linked_evidence, next_step, photo_comparison
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -90,30 +88,31 @@ def show_search():
     work.route("Cases",bucket="all",partner="")
     st.session_state.find_shipment_hint=True
 
+def home_filter(bucket):
+    st.session_state.home_bucket=bucket
+
+
 def home():
-    with st.container(key="home-intro"):
-        text,photo=st.columns([1.15,1],gap="large",vertical_alignment="center")
-        with text:
-            st.html('<p class="eyebrow">CLARITY AT EVERY HANDOFF</p><h1 class="hero-title">Check every handoff.<br><span>Understand every issue.</span></h1><p class="hero-copy">Review shipment evidence and unusual data access across your delivery partners.</p>')
-            primary,secondary=st.columns([1,1.15])
-            primary.button("Review cases",type="primary",icon=":material/arrow_forward:",on_click=shortcut,args=("needs_review",),use_container_width=True)
-            secondary.button("Find a shipment",on_click=show_search,use_container_width=True)
-        with photo:
-            encoded=base64.b64encode((ROOT/"assets/logistics-hero.png").read_bytes()).decode()
-            st.html('<figure class="hero-photo"><img src="data:image/png;base64,'+encoded+'" alt="Decorative generated photograph of a green delivery truck beside a warehouse"><figcaption>Built around the records behind every delivery.<span>Illustrative image · AI generated</span></figcaption></figure>')
-    counts=review_counts(work.cases())
+    st.title("Review workspace")
+    st.caption("Check flagged records and decide the next step. Synthetic demonstration records.")
+    cohort=work.cases()
+    counts=review_counts(cohort)
+    bucket=st.session_state.get("home_bucket","needs_review")
     with st.container(key="summary-strip"):
-        for col,title,bucket in zip(st.columns(4),("Needs review","Waiting for approval","Waiting for evidence","Closed"),("needs_review","awaiting_approval","waiting_evidence","resolved")):
-            with col:
-                st.html('<div class="summary-number"><strong>'+str(counts[bucket])+'</strong><span>'+title+'</span></div>')
-                st.button("View "+title.lower(),key="counter-"+bucket,type="tertiary",on_click=shortcut,args=(bucket,))
-    st.html('<div class="section-heading"><h2>Start with what needs attention</h2><p>All recorded history · only issues you are permitted to review</p></div>')
-    queue=[c for c in work.cases() if c["work_bucket"] in ("needs_review","awaiting_approval","waiting_evidence")]
+        for col,title,value in zip(st.columns(4),("Needs review","Waiting for approval","Waiting for evidence","Closed"),("needs_review","awaiting_approval","waiting_evidence","resolved")):
+            col.button(str(counts[value])+" · "+title,key="counter-"+value,type="primary" if bucket==value else "secondary",on_click=home_filter,args=(value,),use_container_width=True)
+    with st.container(key="home-search"):
+        search,kind=st.columns([2.2,1])
+        query=search.text_input("Search this queue",key="home_query",placeholder="Shipment, partner or case")
+        selected=kind.selectbox("Evidence type",["All","Shipment evidence","Data access"],key="home_kind")
+    queue=[c for c in cohort if c["work_bucket"]==bucket and (selected=="All" or selected=="Data access" and c.get("contains_access") or selected=="Shipment evidence" and c["issue_type"]=="shipment") and (not query or query.lower() in " ".join((c["shipment_id"],c["partner_name"] or "",*issue_info(c),c["case_id"])).lower())]
     queue.sort(key=lambda c:c["priority_score"] or 0,reverse=True)
+    label=next(name for name,value in work.FILTERS.items() if value==bucket)
+    st.caption(f"{label} · {len(queue)} matching cases · only records you are permitted to review")
     issue_header()
-    for case in queue[:3]: issue_row(case)
-    if not queue: st.success("No issues need a decision. Find a shipment to review its records.")
-    st.html('<section class="process"><div class="process-intro"><p class="eyebrow">FROM RECORDS TO REASONS</p><h2>A clearer path<br>to the next step.</h2></div><div><b>01</b><h3>Find an issue</h3><p>See which records need a closer look.</p></div><div><b>02</b><h3>Compare the evidence</h3><p>Check shipment records, photos or account activity.</p></div><div><b>03</b><h3>Choose the next step</h3><p>Request information or submit a decision for approval.</p></div></section>')
+    for case in queue[:8]:issue_row(case)
+    if not queue:st.info("No cases match this queue. Choose another status or change the search.")
+
 
 def issues():
     cohort=work.cases()
@@ -171,7 +170,8 @@ def weight_evidence(case):
                 st.caption("Source: "+humanize(event["source"]) if event else "Source: shipment expectation only")
         st.html('<div class="weight-result"><span>RECORDED DIFFERENCE</span><strong>'+esc(difference_weight(value["weight_g"]["diff"]))+'</strong></div>')
     st.write("The latest weight matches the expectation; review the original signal and subsequent evidence before closing." if value['weight_g']['match'] else "The recorded weights differ. Check the source records and any packaging change before deciding why.")
-    st.caption('Rule tolerance: the larger of 100 g or 5% of the earlier weight. Display precision preserves recorded differences; a small difference can still match within tolerance.')
+    with st.expander('How the weight comparison works'):
+        st.caption('Rule tolerance: the larger of 100 g or 5% of the earlier weight. Display precision preserves recorded differences; a small difference can still match within tolerance.')
     for event in source:
         if event["event_type"]=="repackaging_approved":
             payload=json.loads(event["payload_json"])
@@ -199,21 +199,30 @@ def detail(case):
     evidence,action=st.columns([2.05,1],gap="large")
     with evidence:
         linked_evidence(case)
-        st.subheader("What happened?")
         if case["issue_type"]=="access":
             st.write("A partner account requested a shipment outside its recorded assignment. The access check denied the request; this does not establish intent.")
             access_evidence(case)
         else:
             if any(f["category"]=="weight_diff" for f in case["findings"]):weight_evidence(case)
-            else:st.write(explanation)
+            else:
+                st.write(explanation)
+                comparison=compare_handoff(context()[0],case['shipment_id'])
+                weight=comparison['weight_g']
+                if weight['actual'] is None:
+                    st.write('Handover weight is missing. Before dispatch: '+format_weight(weight['expected'])+'.')
+                else:
+                    st.write('Weight before dispatch: '+format_weight(weight['expected'])+'; at handover: '+format_weight(weight['actual'])+'.')
+                for field,label in (('count','Package quantity'),('seal','Seal reference')):
+                    check=comparison[field]
+                    st.caption(label+': expected '+str(check['expected'] if check['expected'] is not None else 'not recorded')+'; recorded '+str(check['actual'] if check['actual'] is not None else 'missing'))
             photo_comparison(case)
             linked_evidence(case,details=True)
             # The essential comparison and real photos are visible by default.
-            with st.expander("All shipment checks, journey and source records",expanded=not any(f["category"]=="weight_diff" for f in case["findings"])):
+            with st.popover("Shipment checks and source records",use_container_width=True):
                 work.shipment_evidence(case["shipment_id"])
             work.add_evidence(case["shipment_id"])
         with st.container(key="ai-explanation"):
-            st.subheader("A second look with AI")
+            st.subheader("AI review")
             st.caption("Summarize the available evidence and suggest what to check next.")
             work.ai_summary(case)
     with action:
@@ -227,21 +236,13 @@ def detail(case):
             st.json(case["findings"])
 
 def access_evidence(case):
-    scope=check_access_scope(context()[0],case["case_id"],context()[1])
-    refs={i for f in case["findings"] for i in f.get("evidence_ids",[])}
-    logs=[log for log in scope["access_logs"] if log["log_id"] in refs]
-    for log in logs:
-        st.html('<div class="access-facts"><div><span>ACCOUNT</span><strong>'+esc(log["actor_id"])+'</strong></div><div><span>REQUESTED SHIPMENT</span><strong>'+esc(log["shipment_id"])+'</strong></div><div><span>AUTHORIZATION RESULT</span><strong>Access denied</strong></div><div><span>RECORDED TIME</span><strong>'+esc(format_time(log["occurred_at"]))+'</strong></div></div>')
-    st.subheader("Check the assignment")
-    assignments=rows("SELECT actor_id,valid_from,valid_until FROM assignments WHERE shipment_id=?",(case["shipment_id"],))
-    for assignment in assignments:
-        st.write("**Assigned account: "+assignment["actor_id"]+"**")
-        st.caption(format_time(assignment["valid_from"])+" to "+format_time(assignment["valid_until"]))
-    st.info("Still to confirm: whether legitimate work explains the attempted access. An assignment and a business explanation are different checks.")
-    with st.expander("Access source and approved-work context"):
+    linked_evidence(case,details=True)
+    st.info("Still to confirm: whether legitimate work explains the request. An assignment and a business explanation are different checks.")
+    with st.popover("Access source and approved-work context",use_container_width=True):
         work.access_evidence(case)
-    with st.expander("Related shipment evidence"):
+    with st.popover("Related shipment evidence",use_container_width=True):
         work.shipment_evidence(case["shipment_id"])
+
 
 def partners():
     st.title("Delivery partners")

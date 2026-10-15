@@ -23,6 +23,7 @@ def main():
     names.append("reference/ParcelVerify_Codex_Implementation_Brief.md")
     names.append("reference/ParcelVerify_Deployment_Verification_and_Fix.md")
     names.append("reference/ParcelVerify_Groq_Free_Migration.md")
+    names.append("reference/ParcelVerify_AI_and_UI_Fixes.md")
     manifest, batch, batches, size = [], [], [], 0
     archive = output / "ParcelVerify-source.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:

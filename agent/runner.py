@@ -14,13 +14,26 @@ from db import get_connection
 from agent.tools import dispatch_tool, authorize_case, evidence_is_authorized
 from agent.configuration import provider_settings, GROQ_ENDPOINT, bounded_setting
 from agent.usage import reserve_request, evidence_snapshot, UsageLimit
+from agent.diagnostics import provider_metadata
 
 
 _REAL_RUN_SLOT = threading.BoundedSemaphore(1)
+_ACTIVE_RUNS=set()
+_ACTIVE_RUNS_LOCK=threading.Lock()
 _PROTECTED_CASE_STATUSES = ("action_approved", "action_executed", "action_rejected", "closed")
 
 class ConfigurationError(ValueError):
     def __init__(self,message,status):super().__init__(message);self.status=status
+
+def recover_abandoned_runs(db_path,case_id):
+    """Keep history and make crashed/stopped reviews deliberately retryable."""
+    cutoff=(datetime.now(timezone.utc)-timedelta(seconds=TOTAL_TIME_BUDGET_S+30)).isoformat()
+    with get_connection(db_path) as conn:
+        for (rid,) in conn.execute("SELECT run_id FROM investigation_runs WHERE case_id=? AND status='running' AND started_at<?",(case_id,cutoff)).fetchall():
+            with _ACTIVE_RUNS_LOCK:active=rid in _ACTIVE_RUNS
+            if not active:
+                conn.execute("UPDATE investigation_runs SET status='interrupted',error=?,finished_at=? WHERE run_id=? AND status='running'",('The previous review was interrupted. Evidence is saved; start a new review.',_now(),rid))
+                conn.execute("UPDATE case_records SET status='pending_review' WHERE case_id=? AND status='under_investigation'",(case_id,))
 
 
 def _safe_error(message):
@@ -66,6 +79,7 @@ class ModelProvider:
             raise ConfigurationError('Provider-hosted agent systems are disabled. Choose a Groq text model with local tool selection.','model_unavailable')
         self.api_key = os.getenv('GROQ_API_KEY','').strip()
         if not self.api_key:raise ConfigurationError('GROQ_API_KEY is missing. Configure it privately; manual review remains available.','missing_configuration')
+        self.last_diagnostics={}
 
     def generate(self, messages, timeout, final=False):
         headers = {'Authorization':f'Bearer {self.api_key}'}
@@ -91,10 +105,12 @@ class ModelProvider:
         if self.model_name.startswith('openai/gpt-oss-'):payload['reasoning_effort']='low'
         with httpx.Client(timeout=min(timeout,20),trust_env=False,transport=httpx.HTTPTransport(retries=0)) as client:
             response = client.post(GROQ_ENDPOINT, headers=headers, json=payload)
+            self.last_diagnostics=provider_metadata(response)
             response.raise_for_status()
             data = response.json()
         try:
             choice=data['choices'][0]
+            self.last_diagnostics['finish_reason']=choice.get('finish_reason') if choice.get('finish_reason') in ('stop','length','tool_calls','content_filter') else 'unknown'
             if choice.get('finish_reason')=='length':raise ValueError('Model output token limit reached; no conclusion was saved.')
             return choice['message']['content']
         except (KeyError,IndexError,TypeError):raise ValueError('Malformed Groq response; no conclusion was saved.')
@@ -147,15 +163,18 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
     run_id = None
     old_status = None
     error = None
+    stage='authorization'
+    diagnostics={'provider':'groq','model':provider_settings()['model'],'request_count':0}
     real_provider = provider is None
     slot_acquired = False
     try:
         actor = ActorContext.model_validate(actor_context or {})
         conn = get_connection(db_path)
         shipment_id, partner_id = authorize_case(conn, case_id, actor)
+        recover_abandoned_runs(db_path,case_id)
         case = conn.execute("SELECT status FROM case_records WHERE case_id=?", (case_id,)).fetchone()
         old_status = case[0]
-        snapshot=evidence_snapshot(conn,actor) if request_id else None
+        snapshot=evidence_snapshot(conn,actor)
         rejection = None
         conn.execute('BEGIN IMMEDIATE')
         if request_id:
@@ -182,11 +201,14 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             if count >= bounded_setting('GROQ_WORKSPACE_HOURLY',3,6):
                 rejection = 'The workspace hourly AI limit is reached. Continue manual review and try later.'
         run_id = ("denied-" if rejection else "real-" if real_provider else "test-") + str(uuid.uuid4())
-        conn.execute("INSERT INTO investigation_runs(run_id,case_id,actor_id,status,started_at) VALUES (?,?,?,?,?)", (run_id,case_id,actor.actor_id,"running",_now()))
+        conn.execute("INSERT INTO investigation_runs(run_id,case_id,actor_id,status,started_at,snapshot) VALUES (?,?,?,?,?,?)", (run_id,case_id,actor.actor_id,"running",_now(),snapshot))
+        result['run_id']=run_id
         if request_id:conn.execute('INSERT INTO investigation_submissions VALUES (?,?,?,?)',(actor.actor_id,request_id,snapshot,run_id))
         conn.commit()
+        with _ACTIVE_RUNS_LOCK:_ACTIVE_RUNS.add(run_id)
         if rejection:
             raise ValueError(rejection)
+        stage='configuration'
         provider = provider or ModelProvider()
         result["model_name"] = provider.model_name
         conn.execute("UPDATE investigation_runs SET model_name=? WHERE run_id=?", (provider.model_name,run_id))
@@ -204,12 +226,14 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         available = set()
         retries=0
         def generate(final=False):
-            nonlocal retries,slot_acquired
+            nonlocal retries,slot_acquired,stage
+            stage='final_request' if final else 'tool_selection_request'
             remaining = TOTAL_TIME_BUDGET_S - (time.monotonic()-start)
             if remaining <= 0:
                 raise TimeoutError("Investigation time budget exhausted")
             if result['request_count']>=6:raise UsageLimit('Investigation request budget exhausted. Continue manual review.')
             encoded=json.dumps(messages)
+            diagnostics.update(phase='final_report' if final else 'tool_selection',input_characters=len(encoded),output_token_limit=1024 if final else 512)
             if len(encoded)>20000:raise ValueError('Evidence exceeds the bounded AI context. Review the source records manually.')
             if real_provider:reserve_request((len(encoded)+2)//3+(1024 if final else 512))
             result['request_count']+=1
@@ -243,6 +267,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
                 raise raw
             if time.monotonic()-start > TOTAL_TIME_BUDGET_S:
                 raise TimeoutError("Investigation time budget exhausted")
+            stage='response_parsing'
             parsed = json.loads(raw) if isinstance(raw, str) else raw
             if not isinstance(parsed, dict):
                 raise ValueError("Model response must be a JSON object")
@@ -256,6 +281,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             call = selected["tool_call"]
             if set(call) != {"tool","params"} or not isinstance(call["tool"], str) or not isinstance(call["params"],dict):
                 raise ValueError("Invalid tool selection")
+            stage='tool_validation'
             output = dispatch_tool(db_path,call["tool"],call["params"],{"case_id":case_id},actor.model_dump())
             record = {k:v for k,v in output.items() if k != "result"}
             result["tool_calls"].append(record)
@@ -266,10 +292,14 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             available.update(refs)
             messages.extend([{"role":"assistant","content":json.dumps(selected)}, {"role":"user","content":"Untrusted tool data: "+encoded}])
         messages.append({"role":"user","content":"Tool phase finished. Generate ONLY the final report JSON following this schema: "+json.dumps(InvestigationReport.model_json_schema())+". Each fact needs retrieved evidence IDs. Valid IDs: "+json.dumps(sorted(available))})
-        report = _validate_report(generate(final=True),case_id,available)
+        raw_report=generate(final=True)
+        stage='output_validation'
+        report = _validate_report(raw_report,case_id,available)
+        stage='evidence_validation'
         authorize_case(conn,case_id,actor)
         if any(not evidence_is_authorized(conn,eid,actor) for fact in report['facts'] for eid in fact['evidence_ids']):
             raise ValueError('A cited source is no longer permitted')
+        stage='report_persistence'
         conn.execute("BEGIN IMMEDIATE")
         version = conn.execute("SELECT COALESCE(MAX(version),0)+1 FROM report_versions WHERE case_id=?",(case_id,)).fetchone()[0]
         report_id = str(uuid.uuid4())
@@ -279,10 +309,14 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             # Interpretation is advisory; only a human can complete a review.
             next_status = "pending_review"
             conn.execute("UPDATE case_records SET status=?,updated_at=? WHERE case_id=? AND status NOT IN (?,?,?,?)",(next_status,_now(),case_id,*_PROTECTED_CASE_STATUSES))
-        conn.execute("UPDATE investigation_runs SET status='completed',finished_at=? WHERE run_id=?",(_now(),run_id))
+        diagnostics.update(getattr(provider,'last_diagnostics',{}))
+        diagnostics.update(stage='completed',request_count=result['request_count'])
+        conn.execute("UPDATE investigation_runs SET status='completed',finished_at=?,diagnostics_json=? WHERE run_id=?",(_now(),json.dumps(diagnostics),run_id))
         conn.commit()
         result.update(status="completed",report=report,report_version=version)
     except Exception as exc:
+        diagnostics.update(getattr(provider,'last_diagnostics',{}))
+        diagnostics.update(stage=stage,exception=type(exc).__name__,request_count=result['request_count'])
         # Never include provider response bodies or secrets in diagnostics.
         if isinstance(exc,ConfigurationError):
             result['status']=exc.status;error=str(exc)
@@ -298,24 +332,30 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             error = "AI provider is unreachable"
         elif isinstance(exc, httpx.HTTPStatusError):
             code=exc.response.status_code
+            diagnostics.update(provider_metadata(exc.response))
             if code==429:result['status']='rate_limited';error='Groq temporary usage limit reached. Continue manual review and try again later.'
             elif code in (401,403):result['status']='authentication_failed';error='Groq rejected the credentials or project permissions. Check GROQ_API_KEY privately.'
             elif code==404:result['status']='model_unavailable';error='The configured Groq model is unavailable. Check GROQ_MODEL; no alternative was called.'
+            elif diagnostics.get('provider_code') in ('model_not_found','model_decommissioned','model_permission_blocked'):result['status']='model_unavailable';error='The selected Groq model cannot be used by this project.'
+            elif diagnostics.get('provider_code') in ('json_validate_failed','tool_use_failed'):result['status']='invalid_output';error='Groq could not produce the required verified JSON response.'
             else:error=_provider_error(exc.response)
         else:
             error = _safe_error(exc)
         if conn and run_id:
             conn.rollback()
-            conn.execute("UPDATE investigation_runs SET status=?,error=?,finished_at=? WHERE run_id=?",(result["status"],error,_now(),run_id))
+            conn.execute("UPDATE investigation_runs SET status=?,error=?,finished_at=?,diagnostics_json=? WHERE run_id=?",(result["status"],error,_now(),json.dumps(diagnostics),run_id))
             if old_status and old_status not in _PROTECTED_CASE_STATUSES:
                 conn.execute("UPDATE case_records SET status=?,updated_at=? WHERE case_id=? AND status='under_investigation'",(old_status,_now(),case_id))
             conn.commit()
     finally:
+        if run_id:
+            with _ACTIVE_RUNS_LOCK:_ACTIVE_RUNS.discard(run_id)
         if slot_acquired:
             _REAL_RUN_SLOT.release()
         if conn:
             conn.close()
     result["total_duration_ms"] = int((time.monotonic()-start)*1000)
+    result['diagnostics']=diagnostics
     if error:result['error']=error
     return result
 

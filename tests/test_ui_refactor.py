@@ -41,16 +41,16 @@ def open_main(app):
     return app.session_state.selected_case_id
 
 
-def test_open_back_filter_and_honest_ai_unavailable(app):
-    widget(app.button, 'View needs review').click().run()
-    assert app.session_state.primary_destination == 'Cases'
-    assert app.selectbox(key='status_widget').value == 'Needs review'
+def test_open_back_filter_and_honest_ai_state(app):
+    app.button(key='counter-needs_review').click().run()
+    assert app.session_state.primary_destination == 'Home'
+    assert app.session_state.home_bucket == 'needs_review'
     first = next(button for button in app.button if (button.key or '').startswith('open-'))
     selected = first.key.removeprefix('open-')
     first.click().run()
     healthy(app)
     assert app.session_state.selected_case_id == selected
-    assert any('AI explanation is unavailable' in item.value for item in app.info)
+    assert any('AI review' in item.value for item in app.info)
     assert not any(item.value == '**What we found**' for item in app.markdown)
     widget(app.button, 'Back to cases').click().run()
     app.selectbox(key='status_widget').set_value('All').run()
@@ -159,10 +159,10 @@ def test_access_review_close_and_matching_counter(app):
     widget(app.button,'Close case').click().run()
     healthy(app)
     app.button(key='nav-Home').click().run()
-    widget(app.button,'View closed').click().run()
+    app.button(key='counter-resolved').click().run()
     shown={b.key.removeprefix('open-') for b in app.button if (b.key or '').startswith('open-')}
     assert shown=={case_id}
-    assert app.selectbox(key='issue_widget').value=='All'
+    assert app.session_state.primary_destination=='Home'
 
 
 def test_cancel_preserves_draft_and_supervisor_can_record_missing_information(app):
@@ -179,3 +179,18 @@ def test_cancel_preserves_draft_and_supervisor_can_record_missing_information(ap
     with get_connection(app.session_state.db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM evidence_tasks WHERE case_id=? AND task_type='supplementary_statement'",(case_id,)).fetchone()[0]==1
         assert conn.execute('SELECT status FROM action_requests WHERE case_id=?',(case_id,)).fetchone()[0]=='proposed'
+
+
+def test_home_status_and_search_filter_the_local_queue(app):
+    cohort=list_review_cases(app.session_state.db_path,app.session_state.actor_context)
+    for bucket in ('needs_review','awaiting_approval','waiting_evidence','resolved'):
+        app.button(key='counter-'+bucket).click().run()
+        healthy(app)
+        assert app.session_state.primary_destination=='Home'
+        expected={c['case_id'] for c in cohort if c['work_bucket']==bucket}
+        shown={b.key.removeprefix('open-') for b in app.button if (b.key or '').startswith('open-')}
+        assert shown==set(sorted(expected,key=lambda cid:next(c['priority_score'] or 0 for c in cohort if c['case_id']==cid),reverse=True)[:8])
+    app.button(key='counter-needs_review').click().run()
+    app.text_input(key='home_query').set_value('no-such-record').run()
+    assert not [b for b in app.button if (b.key or '').startswith('open-')]
+    assert app.session_state.primary_destination=='Home'
