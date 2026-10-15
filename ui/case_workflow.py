@@ -58,7 +58,11 @@ def linked_evidence(case,details=False):
     for member in members:
         ids={i for f in member['findings'] for i in f.get('evidence_ids',[])}
         logs=[r for r in rows('SELECT l.*,p.name requesting_partner FROM access_logs l LEFT JOIN partners p ON l.partner_id=p.partner_id WHERE l.shipment_id=?',(member['shipment_id'],)) if r['log_id'] in ids]
-        for log in logs:
+        allowed=[log for log in logs if log['outcome'] in ('allowed','authorized','granted')]
+        if allowed:
+            st.write(str(len(allowed))+' authorized requests · '+member['shipment_id'])
+            st.caption('Recorded '+format_time(min(log['occurred_at'] for log in allowed))+' to '+format_time(max(log['occurred_at'] for log in allowed))+'. Authorized activity alone is not a blocked-access finding.')
+        for log in [log for log in logs if log not in allowed]:
             st.write('**Account** · '+(log['requesting_partner'] or 'Partner not recorded'))
             result='Access request blocked' if log['outcome']=='denied' else 'Authorized activity' if log['outcome'] in ('allowed','authorized','granted') else humanize(log['outcome'])
             st.write(result+' · '+member['shipment_id'])
@@ -67,7 +71,7 @@ def linked_evidence(case,details=False):
         for assignment in assignments:
             st.caption('Assigned account · '+(assignment['assigned_partner'] or 'Partner not recorded'))
         with st.expander('Account identifiers and source details · '+member['case_id'][:6].upper()):
-            for log in logs:st.write('Requesting account: '+log['actor_id']+' · '+log['action']+' · '+log['outcome'])
+            for log in logs:st.write('Requesting account: '+log['actor_id']+' · '+log['action']+' · '+log['outcome']+' · '+format_time(log['occurred_at']))
             for assignment in assignments:st.write('Assigned account: '+assignment['actor_id'])
     photo_ids=list(dict.fromkeys(i for f in ctx['findings'] if f['category']=='photo_reuse' for i in f['evidence_ids']))
     if photo_ids:

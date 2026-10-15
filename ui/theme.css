@@ -8,7 +8,8 @@ p,[data-testid="stMarkdownContainer"]{font-size:16px;line-height:1.6}
 .stButton button,.stDownloadButton button,[data-testid="stFormSubmitButton"] button,[data-testid="stPopover"] button{min-height:44px;border-radius:7px;font-weight:600}
 button:focus-visible,input:focus-visible,textarea:focus-visible,[role="combobox"]:focus-visible,summary:focus-visible{outline:3px solid #B98318!important;outline-offset:3px}
 button[kind="primary"]{background:var(--pv-green);border-color:var(--pv-green);color:white}
-[data-testid="stHeader"]{background:transparent}
+[data-testid="stHeader"]{background:transparent;pointer-events:none}
+[data-testid="stHeader"] button,[data-testid="stHeader"] a{pointer-events:auto}
 .st-key-desktop-header{padding:0 0 18px;border-bottom:1px solid var(--pv-border);margin-bottom:24px}
 .st-key-mobile-header{display:none}
 .st-key-scroll-hook{display:none}
