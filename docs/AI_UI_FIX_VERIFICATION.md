@@ -66,17 +66,25 @@ are administrator-only. Additive database migrations preserve existing records.
 
 ## Checks actually completed
 
+- Final protocol/state/security/UI regression suite: **64 passed**, all model
+  responses mocked. Build/runtime identity suite: **5 passed** separately.
 - 105 focused AI, permissions, security and workflow tests passed.
 - 29 focused AI-state/Groq transport tests passed (overlap with the above suite).
 - 13 UI/widget/build-identity tests passed, including a mocked failed review,
   Settings/case agreement, deliberate retry and navigation without duplicate calls.
-- Eight real-browser local screens: Home, linked case, access-only case and
-  shipment-only case at 1366 × 768 and 390 × 844. No horizontal overflow or
+- Fourteen real-browser local screens: Home, linked case, photo comparison,
+  AI review, next step, access-only case and shipment-only case at
+  1366 × 768 and 390 × 844. No horizontal overflow or
   Streamlit exceptions. Two desktop case actions appear within 768 pixels.
 - Public HTTPS initially returned 200 and showed the new Home/case UI. A real
   hosted navigation defect was found: Streamlit's transparent toolbar intercepted
   Workspace clicks. CSS now excludes the transparent area from pointer handling
   while keeping actual host buttons clickable.
+- Public read-only verification of application commit `1e607ff4557c43ebb67ae8fdc922c2b07f30ceb4`
+  confirmed release `groq-review-20261016.2`, source build `1334003d26a242aa`,
+  loaded functions matching source and dataset `linked-cases-v5`. No provider
+  request was made by that check. Mobile review then caught a menu that stayed
+  open after navigation; navigation now replaces that menu so the queue is visible.
 
 The final read-only public check is separate from the diagnostic live-run artifact;
 `diagnostic-live-result.json` preserves the single failed live attempt and
@@ -103,3 +111,12 @@ Cloud app Secrets. Do not put it in source files, screenshots or chat.
 loaded functions. Only explicit `--ai` enables one synthetic investigation, after
 build and configuration checks. It never loops AI attempts or resumes an owner's
 private workspace. Hosted AI outcome is recorded separately in its result artifact.
+
+## Remaining live check
+
+After confirming release `groq-review-20261016.2` and matching loaded functions in
+Settings, the owner can open one synthetic case and click **Review evidence with
+AI** once. A successful run must include permitted tool executions and validated
+citations; a quota error or invalid output remains a failure. On failure, download
+the administrator-only diagnostic record and share only its sanitized metadata.
+Do not repeatedly retry, enable another provider or reset existing records.

@@ -15,21 +15,23 @@ from ui.case_workflow import linked_evidence, next_step, photo_comparison
 ROOT=Path(__file__).resolve().parents[1]
 
 def navigate(destination):
+    st.session_state.navigation_generation=st.session_state.get('navigation_generation',0)+1
     work.route(destination)
 
 def header():
     current=st.session_state.setdefault("primary_destination","Home")
+    generation=st.session_state.get('navigation_generation',0)
     with st.container(key="desktop-header"):
         brand,home,issues,partners,account=st.columns([3.6,1,1,1,1.4],vertical_alignment="center")
         brand.html('<div class="brand"><span class="brand-symbol">↗</span>ParcelVerify<span class="demo-tag">DEMO</span></div>')
         for col,name in ((home,"Home"),(issues,"Cases"),(partners,"Partners")):
             col.button(name,key="nav-"+name,type="primary" if current==name and not st.session_state.get("secondary_view") else "tertiary",on_click=navigate,args=(name,),use_container_width=True)
-        with account.popover("Workspace",icon=":material/account_circle:",use_container_width=True):
+        with account.popover("Workspace",key='workspace-menu-'+str(generation),icon=":material/account_circle:",use_container_width=True):
             secondary_menu("desktop")
     with st.container(key="mobile-header"):
         brand,menu=st.columns([2.5,1],vertical_alignment="center")
         brand.html('<div class="brand"><span class="brand-symbol">↗</span>ParcelVerify</div>')
-        with menu.popover("Menu",icon=":material/menu:"):
+        with menu.popover("Menu",key='mobile-menu-'+str(generation),icon=":material/menu:"):
             for name in ("Home","Cases","Partners"):
                 st.button(name,key="mobile-nav-"+name,on_click=navigate,args=(name,),use_container_width=True)
             st.caption("Demo workspace")
@@ -41,6 +43,7 @@ def secondary_menu(prefix):
         st.button(name,key=prefix+"-"+name,on_click=set_secondary,args=(name,),use_container_width=True)
 
 def set_secondary(name):
+    st.session_state.navigation_generation=st.session_state.get('navigation_generation',0)+1
     st.session_state.secondary_view=name
 
 def issue_info(case):

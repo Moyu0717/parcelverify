@@ -1,7 +1,7 @@
 """Isolated synthetic UI verification. Never enables provider execution."""
 import json, os, re, subprocess, tempfile, time, urllib.request, sys
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright,expect
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'qa/artifacts/review-workspace'
 sys.path.insert(0,str(ROOT))
@@ -27,6 +27,11 @@ def main():
                         known=set(Path(directory).rglob('parcelverify.db'))
                         page=context.new_page();page.goto('http://localhost:18509')
                         page.get_by_role('heading',name='Review workspace',exact=True).wait_for(timeout=60000)
+                        if width==390:
+                            menu=page.get_by_role('button',name=re.compile(r'\bMenu\b'))
+                            menu.click()
+                            page.get_by_role('button',name='Home',exact=True).last.click()
+                            expect(menu).to_have_attribute('aria-expanded','false',timeout=15000)
                         def capture(name):
                             page.wait_for_timeout(800)
                             page.screenshot(path=str(OUT/f'{name}-{width}.png'),full_page=True)
@@ -53,6 +58,12 @@ def main():
                         capture('linked-case')
                         assert page.get_by_role('heading',name='Account activity',exact=True).count()==1
                         assert not page.get_by_text(re.compile('permitted near-image candidates')).is_visible()
+                        page.get_by_role('heading',name='Compare the recorded photos',exact=True).scroll_into_view_if_needed()
+                        capture('photo-comparison')
+                        page.get_by_role('heading',name='AI review',exact=True).scroll_into_view_if_needed()
+                        capture('ai-review')
+                        page.get_by_text('YOUR NEXT STEP',exact=True).scroll_into_view_if_needed()
+                        capture('next-step')
                         page.get_by_role('button',name=re.compile('Back to cases')).click()
                         page.get_by_role('heading',name='Cases to review',exact=True).wait_for()
                         select=page.get_by_test_id('stSelectbox').filter(has=page.get_by_text('Issue type',exact=True))
