@@ -59,6 +59,22 @@ def main():
                 result['live_diagnostic']=record
                 result['case_after']=page.locator('body').inner_text()
                 page.screenshot(path=str(OUT/'after-public-ai.png'),full_page=True)
+            # Read-only mobile checks share this synthetic workspace and cannot
+            # trigger inference. They also exercise actual hosted navigation.
+            page.set_viewport_size({'width':390,'height':844})
+            page.get_by_role('button',name='Menu',exact=True).click()
+            page.get_by_role('button',name='Home',exact=True).last.click()
+            page.get_by_role('heading',name='Review workspace',exact=True).wait_for()
+            page.wait_for_timeout(1000)
+            page.screenshot(path=str(OUT/'after-public-home-mobile.png'),full_page=True)
+            result['mobile_home_overflow']=page.evaluate('document.documentElement.scrollWidth > innerWidth')
+            page.get_by_role('button',name=re.compile('Compare weights')).first.click()
+            page.get_by_role('heading',name='Check a weight difference',exact=True).wait_for()
+            page.wait_for_timeout(1000)
+            page.screenshot(path=str(OUT/'after-public-case-mobile.png'),full_page=True)
+            result['mobile_case_overflow']=page.evaluate('document.documentElement.scrollWidth > innerWidth')
+            result['runtime_exceptions']=page.get_by_test_id('stException').count()
+            assert not result['mobile_home_overflow'] and not result['mobile_case_overflow'] and not result['runtime_exceptions']
             result['status']='checked'
         except Exception as error:
             result['status']='blocked';result['blocker']=str(error)[:1000]

@@ -29,6 +29,35 @@ This establishes failure before a tool executed, but does not establish an
 invalid key, unavailable model or quota exhaustion. The old run did not preserve
 Groq's reason; it cannot be recovered retrospectively from that record.
 
+One controlled public synthetic investigation reproduced the failure on checked-out
+commit `c0a971288434c6ef5c9d536c659a1f591faf5768`, source build
+`aad81ba1d6d05ffe`, with loaded Python functions verified against source and
+dataset `linked-cases-v5`. Run `real-fb1b3dc7-7dd3-4ed9-aab7-fb06e2769cc4`
+made exactly one provider request and no local tool calls. Groq returned HTTP 400,
+code `tool_use_failed`, type `invalid_request_error`, at `tool_selection_request`;
+request ID `req_01m508128hevcr1m1v1qks8c5c`. No report was saved. The previous
+record's cause cannot retrospectively be proven identical.
+
+The confirmed defect in the request path was a tool protocol mismatch: the prompt
+asked a tool-capable model to select record readers, but the request declared no
+native functions and requested JSON content. Groq rejected tool selection rather
+than returning a report. Its message was conservatively redacted; no original
+body or failed generation was retained. We do not infer a credential or quota
+problem from this result.
+
+The correction declares **only the existing local read-only whitelist** as native
+functions, accepts a single function choice, and converts it to the existing
+permission-checked dispatcher. Subsequent messages pair each function call with
+its actual local result. The final request remains a separate strict JSON report
+request without native tool declarations. Unknown or parallel calls, malformed
+arguments, unauthorized requests and unverified citations remain failures.
+This follows Groq's [local function protocol](https://console.groq.com/docs/tool-use/local-tool-calling)
+and its [structured-output restrictions](https://console.groq.com/docs/structured-outputs).
+
+The correction is tested with mocked HTTP responses. The one live investigation
+was used to diagnose the failure; no second live attempt was made. Successful
+real investigation after the protocol correction remains **unverified**.
+
 New runs record stage, exception category, HTTP status, request count, selected
 model, safe request ID, allowlisted provider code/type and a sanitized message
 excerpt. Known API wording is retained; arbitrary reflected prose, unknown values,
@@ -48,6 +77,11 @@ are administrator-only. Additive database migrations preserve existing records.
   hosted navigation defect was found: Streamlit's transparent toolbar intercepted
   Workspace clicks. CSS now excludes the transparent area from pointer handling
   while keeping actual host buttons clickable.
+
+The final read-only public check is separate from the diagnostic live-run artifact;
+`diagnostic-live-result.json` preserves the single failed live attempt and
+`public-result.json` records the latest checkout/UI check. Do not interpret a
+successful read-only probe as a successful live investigation.
 
 All automated model tests use mocked transport and isolated temporary databases.
 They do not prove that a real provider investigation succeeds.

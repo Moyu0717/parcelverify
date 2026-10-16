@@ -15,6 +15,7 @@ def safe_provider_message(message):
     """
     if not isinstance(message,str):return None
     patterns=[
+        r'Tool choice is none, but (?:the )?model called a tool\.?',
         r'Failed to generate (?:JSON|a valid JSON|tool calls?)[^.]*\.',
         r'Please adjust your prompt\.',
         r'See [\x27\"]?failed_generation[\x27\"]? for more details\.',

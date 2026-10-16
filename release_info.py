@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DATASET_VERSION = 'linked-cases-v5'
-RELEASE = 'groq-review-20261016.1'
+RELEASE = 'groq-review-20261016.2'
 
 def build_information():
     digest = hashlib.sha256()

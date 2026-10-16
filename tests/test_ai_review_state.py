@@ -47,6 +47,8 @@ def test_error_diagnostics_keep_reason_without_provider_payload(monkeypatch):
     assert 'Alice' not in str(provider_metadata(reflected))
     assert 'gsk_super_secret' not in str(provider_metadata(reflected))
     assert 'private secret' not in str(provider_metadata(reflected))
+    tool_error=httpx.Response(400,json={'error':{'type':'invalid_request_error','code':'tool_use_failed','message':'Tool choice is none, but model called a tool'}})
+    assert provider_metadata(tool_error)['provider_message']=='Tool choice is none, but model called a tool'
 
 def test_http_failure_persists_stage_and_does_not_save_report(seeded_db):
     cid=_create_case_for_investigation(seeded_db)['case_id']

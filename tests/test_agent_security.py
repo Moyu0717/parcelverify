@@ -5,6 +5,7 @@ import pytest
 from db import get_connection
 from agent.runner import investigate_case, ModelProvider
 from agent.tools import dispatch_tool
+from contracts import TOOL_WHITELIST
 from tests.test_agent import seeded_db, ADMIN_ACTOR, _create_case_for_investigation, ScriptedProvider, valid_report
 
 
@@ -176,15 +177,18 @@ def test_groq_provider_http_contract(monkeypatch,final):
         return httpx.Response(200,json={"choices":[{"message":{"content":json.dumps(response_json)}}]})
     client = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr("agent.runner.httpx.Client",lambda **kwargs:client)
-    assert json.loads(provider.generate([],1,final=final)) == response_json
+    assert json.loads(provider.generate([{'role':'system','content':'Read permitted records.'}],1,final=final)) == response_json
     request = requests[0]
     assert str(request.url) == 'https://api.groq.com/openai/v1/chat/completions'
     assert request.headers["Authorization"] == "Bearer groq-server-secret"
     payload = json.loads(request.content)
     assert payload["model"] == 'openai/gpt-oss-20b'
-    assert payload["response_format"]["type"] == ("json_schema" if final else "json_object")
     if final:
+        assert payload["response_format"]["type"] == "json_schema" and 'tools' not in payload
         assert payload["response_format"]["json_schema"]["schema"]["properties"]["verdict"]
+    else:
+        assert 'response_format' not in payload and payload['tool_choice']=='auto'
+        assert {tool['function']['name'] for tool in payload['tools']}==set(TOOL_WHITELIST)
     assert "groq-server-secret" not in request.content.decode()
 
 
