@@ -85,6 +85,11 @@ are administrator-only. Additive database migrations preserve existing records.
   loaded functions matching source and dataset `linked-cases-v5`. No provider
   request was made by that check. Mobile review then caught a menu that stayed
   open after navigation; navigation now replaces that menu so the queue is visible.
+- Final application commit `dc710918926c9762256daf272dc61c618fd41440` reached
+  the hosted checkout with source build `3322e4b72a852f3d`. The final read-only
+  probe correctly stopped: the running process still held old
+  `ui.design_ui.navigate`. **The final menu correction is not yet verified live.**
+  The owner must reboot the Community Cloud app to refresh that cached module.
 
 The final read-only public check is separate from the diagnostic live-run artifact;
 `diagnostic-live-result.json` preserves the single failed live attempt and
@@ -113,6 +118,12 @@ build and configuration checks. It never loops AI attempts or resumes an owner's
 private workspace. Hosted AI outcome is recorded separately in its result artifact.
 
 ## Remaining live check
+
+First reboot the app from the owner's Streamlit workspace: open
+`share.streamlit.io`, select this app's overflow menu, choose **Reboot**, then
+confirm the reboot. In the app, Settings → Build information must show the current
+checkout and **Loaded Python functions match the checked-out source**. The public
+visitor cannot perform the owner-only restart.
 
 After confirming release `groq-review-20261016.2` and matching loaded functions in
 Settings, the owner can open one synthetic case and click **Review evidence with
