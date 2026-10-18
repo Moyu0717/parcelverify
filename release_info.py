@@ -3,11 +3,12 @@ import hashlib
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DATASET_VERSION = 'linked-cases-v5'
-RELEASE = 'groq-review-20261016.2'
+RELEASE = 'groq-repair-20261018.1'
 
 def build_information():
     digest = hashlib.sha256()
@@ -26,7 +27,8 @@ def build_information():
                 commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, timeout=3, check=True).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             pass
-    return {'Release': RELEASE, 'Source build': digest.hexdigest()[:16], 'Checked-out commit': commit}
+    return {'Release': RELEASE, 'Source build': digest.hexdigest()[:16], 'Checked-out commit': commit,
+            'Python runtime':sys.version.split()[0], 'Entry point':'app.py'}
 
 def dataset_version(db_path):
     with sqlite3.connect(db_path) as conn:

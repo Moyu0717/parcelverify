@@ -18,6 +18,8 @@ def list_tasks(db_path,case_id,actor_context):
         return [dict(t) for t in tasks]
 
 def submit_task_response(db_path,task_id,actor_context,payload,occurred_at,*,file_bytes=None,submission_key):
+    from services.handoff import validate_evidence_fields
+    validate_evidence_fields(payload, occurred_at)
     actor=ActorContext(**actor_context)
     if actor.role not in ('admin','investigator','partner_user'):raise AuthorizationError('Supervisors review evidence rather than submit it')
     if not isinstance(payload,dict) or not submission_key:raise ValueError('Provide evidence and a retry reference')
@@ -57,9 +59,12 @@ def submit_task_response(db_path,task_id,actor_context,payload,occurred_at,*,fil
             if kind=='rephoto' and not file_bytes:raise ValueError('This task needs a new photo')
             if kind=='rescan' and 'count' not in payload:raise ValueError('This task needs a package count')
             if kind=='supplementary_statement' and len(str(payload.get('notes','')).strip())<10:raise ValueError('Explain the requested context in at least 10 characters')
-            now=_utc_now_iso();eid=str(uuid.uuid4());photo_id=None
+            now=_utc_now_iso();eid=str(uuid.uuid4());photo_id=None;submission_id=str(uuid.uuid4())
             event_type='weight_measured' if kind=='reweigh' or 'weight_g' in payload else 'handoff_submitted' if kind in ('rescan','rephoto') else 'message_reported'
-            conn.execute('INSERT INTO events(event_id,shipment_id,partner_id,actor_id,event_type,occurred_at,received_at,source,payload_json) VALUES(?,?,?,?,?,?,?,?,?)',(eid,sid,pid,actor.actor_id,event_type,occurred_at,now,'task_response:'+task_id,json.dumps(payload)))
+            # Separate revised responses may describe the same observation time.
+            # The submission key above handles retries; the source identifies
+            # this response so the general event dedup index does not conflate it.
+            conn.execute('INSERT INTO events(event_id,shipment_id,partner_id,actor_id,event_type,occurred_at,received_at,source,payload_json) VALUES(?,?,?,?,?,?,?,?,?)',(eid,sid,pid,actor.actor_id,event_type,occurred_at,now,'task_response:'+task_id+':'+submission_id,json.dumps(payload)))
             if file_bytes:
                 directory=Path(db_path).resolve().parent/'photos';directory.mkdir(exist_ok=True)
                 existing=[p for p in directory.iterdir() if p.is_file()]
@@ -67,7 +72,6 @@ def submit_task_response(db_path,task_id,actor_context,payload,occurred_at,*,fil
                 photo_id=str(uuid.uuid4());created_file=directory/(photo_id+('.jpg' if fmt=='JPEG' else '.png'))
                 created_file.write_bytes(file_bytes)
                 conn.execute('INSERT INTO photos VALUES(?,?,?,?,?,?,?,?,?)',(photo_id,eid,str(created_file),hashlib.sha256(file_bytes).hexdigest(),_compute_phash(file_bytes),now,occurred_at,'task_upload',str(payload.get('notes',''))))
-            submission_id=str(uuid.uuid4())
             conn.execute('INSERT INTO task_submissions(submission_id,task_id,submission_key,intent_hash,event_id,photo_id,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(submission_id,task_id,submission_key,intent,eid,photo_id,actor.actor_id,now))
             conn.execute("UPDATE evidence_tasks SET status='received',resolution_json=? WHERE task_id=?",(json.dumps(dict(submission_id=submission_id,evidence_verified=False)),task_id))
             parent=conn.execute('SELECT parent_case_id FROM case_members WHERE member_case_id=?',(cid,)).fetchone()

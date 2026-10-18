@@ -13,7 +13,7 @@ from agent.runner import investigate_case
 from services.access import query_shipment, check_access_scope
 from services.actions import propose_action, review_action, execute_action, create_evidence_task
 from services.audit import export_audit
-from services.handoff import compare_handoff
+from services.handoff import compare_handoff, evidence_fields
 from services.review import list_review_cases, review_counts, record_review_decision
 from services.risk import get_partner_metrics
 from services.workflow import submit_handoff
@@ -163,12 +163,14 @@ def events(shipment):
 def comparison(shipment):
     value=compare_handoff(context()[0],shipment)
     check=lambda result:"Missing" if result is None else "Matches" if result else "Different"
-    weight=value["weight_g"]; missing=value["unknowns"]
+    weight=value["weight_g"]; missing=value["unknowns"]; location=value.get("location",evidence_fields({}))
     data=[("Quantity",value["count"]["expected"],value["count"]["actual"],check(value["count"]["match"])),
         ("Weight",format_weight(weight["expected"]),format_weight(weight["actual"]),check(weight["match"])+(": "+difference_weight(weight["diff"]) if weight["diff"] else "")),
         ("Seal",value["seal"]["expected"],value["seal"]["actual"],check(value["seal"]["match"])),
-        ("Location","Expected destination" if "destination_gps" not in missing else None,"Not recorded" if "actual_gps" in missing else "Location recorded","Missing" if "actual_gps" in missing else "Different" if value.get("location_conflict") else "Not checked"),
+        ("Location ("+stage_label(location.get("stage"))+")",location["expected"],location["actual"],location["status"]),
         ("Recipient confirmation",value["recipient"]["expected"],value["recipient"]["actual"],check(value["recipient"]["authorized"]))]
+    delivery=value.get("delivery_location")
+    if delivery: data.append(("Delivery GPS",delivery["expected"],delivery["actual"],delivery["status"]))
     st.html('<div class="pv-compare pv-compare-head"><span>Check</span><span>Before</span><span>At handover / delivery</span><span>Result</span></div>')
     for name,before,after,result in data:
         st.html('<div class="pv-compare"><strong>'+escape(name)+'</strong><span><small>Before</small>'+escape(str(before) if before is not None else "Missing")+'</span><span><small>At handover / delivery</small>'+escape(str(after) if after is not None else "Missing")+'</span><span>'+escape(result)+'</span></div>')
@@ -196,6 +198,14 @@ def shipment_evidence(shipment):
     st.subheader("Shipment journey")
     journey=[e for e in source if e["event_type"] in ("dispatch_confirmed","handoff_submitted","pod_submitted","collection_submitted","warehouse_transfer","transit_update")]
     st.html('<div class="pv-journey">'+''.join('<div class="pv-stop"><strong>'+escape(stage_label(e["event_type"]))+'</strong><small>'+escape(format_time(e["occurred_at"]))+'</small></div>' for e in journey)+'</div>')
+    st.subheader("Recorded handoff facts")
+    st.caption("Event and upload times use MYT (UTC+08:00). Names and expected locations are recorded claims, not independently verified identities or routing rules.")
+    for event in journey:
+        facts=evidence_fields(event)
+        st.write("**"+stage_label(event["event_type"])+"**")
+        st.write("Location: "+str(facts["actual"] or "Unknown")+" · Expected at this stage: "+str(facts["expected"] or "Unknown")+" · "+facts["status"])
+        st.write("Custodian: "+str(facts["custodian"] or "Unknown")+" · Sender: "+str(facts["sender"] or "Unknown")+" · Receiver: "+str(facts["receiver"] or "Unknown"))
+        st.caption("Event: "+format_time(event["occurred_at"])+" · Uploaded: "+format_time(event["received_at"]))
     st.subheader("Photos")
     images=rows("SELECT p.*,e.event_type,e.occurred_at FROM photos p JOIN events e ON p.event_id=e.event_id WHERE e.shipment_id=? ORDER BY e.occurred_at",(shipment,))
     if not images: st.info("No photo has been provided. You can add one or request a photo.")
@@ -343,7 +353,7 @@ def next_step(case,show_review=True):
             initial="The handover weight is "+difference_weight(values["weight_g"]["diff"])+" than the dispatch record." if action_type=="request_reweigh" and values["weight_g"]["diff"] else concern(case)+". Please review the source evidence."
             reason=draft_input("text_area","Reason for the request",case["case_id"],"request-reason",value=initial,max_chars=2000)
             st.caption("Shipment: "+case["shipment_id"])
-            st.caption("Demo reviewer: Nora Lee · Supervisor. The active reviewer identity is recorded on the decision.")
+            st.caption("An authorized demo supervisor reviews this request. The active reviewer identity and reason are recorded on the decision.")
             st.caption("Recipient: the assigned demo partner for "+(case["partner_name"] or "Unassigned")+". Tasks appear in this case; no message is sent.")
             st.caption("Next state: Waiting for approval. After approval, applying a verification request creates a local evidence task.")
             st.caption("Demo only — no message will be sent")
@@ -420,13 +430,18 @@ def add_evidence(shipment):
             else:
                 quantity=weight=seal=""
                 recipient=draft_input("text_input","Recipient name",shipment,"recipient",max_chars=120)
+            location=draft_input("text_input","Recorded location at this stage",shipment,"location",max_chars=200)
+            expected_location=draft_input("text_input","Expected location at this stage (if documented)",shipment,"expected_location",max_chars=200)
+            custodian=draft_input("text_input","Recorded custodian name",shipment,"custodian",max_chars=120)
+            sender=draft_input("text_input","Recorded sender name",shipment,"sender",max_chars=120)
+            receiver=draft_input("text_input","Recorded receiver name",shipment,"receiver",max_chars=120)
             now=datetime.now(timezone.utc).astimezone(MYT)
             col1,col2=st.columns(2)
             date=col1.date_input("Recorded date (MYT)",now.date())
             time=col2.time_input("Recorded time (MYT)",now.time().replace(second=0,microsecond=0))
             note=draft_input("text_area","Supporting note",shipment,"note",max_chars=4000)
             photo=st.file_uploader("Attach a photo",type=["jpg","jpeg","png"],help="JPEG or PNG, up to 10 MB.")
-            st.caption("Check these facts before saving. Missing measurements will stay unconfirmed.")
+            st.caption("Event time uses MYT (UTC+08:00); upload time is recorded separately by the server. Leave unknown identities or stage expectations empty. Missing facts stay unconfirmed.")
             save=st.button("Save evidence",type="primary",key="save-evidence-"+shipment)
         if save:
             try:
@@ -440,6 +455,8 @@ def add_evidence(shipment):
                     payload["weight_g"]=float(measured*1000)
                 if seal.strip(): payload["seal_id"]=seal.strip()
                 if recipient.strip(): payload["recipient_name"]=recipient.strip()
+                for key,value in (("handoff_location",location),("expected_handoff_location",expected_location),("custodian_name",custodian),("sender_name",sender),("receiver_name",receiver)):
+                    if value.strip(): payload[key]=value.strip()
                 occurred=datetime.combine(date,time,tzinfo=MYT).astimezone(timezone.utc).isoformat()
                 result=submit_handoff(path,actor,shipment,stage,payload,occurred,photo.getvalue() if photo else None,source="manual_evidence")
                 notice("Evidence saved and checked." if result["event"]["is_new"] else "This evidence was already saved. No duplicate was added.")

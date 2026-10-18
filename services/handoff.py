@@ -28,6 +28,48 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def validate_evidence_fields(payload: dict, occurred_at: str) -> None:
+    """Validate submitted measurements and explicit event timezone; retain future source times."""
+    from math import isfinite
+    if not isinstance(payload, dict):
+        raise ValueError("Evidence payload must be an object.")
+    for key in ('handoff_location','expected_handoff_location','custodian_name','sender_name','receiver_name'):
+        value=payload.get(key)
+        if value is not None and (not isinstance(value,str) or len(value)>200):
+            raise ValueError(key+' must be recorded text of at most 200 characters.')
+    for key in ("weight_g", "count"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or value < 0:
+            raise ValueError(f"{key} must be a finite non-negative number.")
+        if key == "count" and value != int(value):
+            raise ValueError("count must be a whole number of packages.")
+    try:
+        parsed = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
+        if parsed.utcoffset() is None:
+            raise ValueError()
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError("Event time must be a valid ISO timestamp with an explicit timezone.") from None
+
+
+def evidence_fields(event: dict) -> dict:
+    """Expose stage-local recorded claims, without authenticating identities or routes."""
+    payload = event.get("payload_json", {})
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    actual, expected = payload.get("handoff_location"), payload.get("expected_handoff_location")
+    match = None
+    if isinstance(actual, str) and actual.strip() and isinstance(expected, str) and expected.strip():
+        match = " ".join(actual.split()).casefold() == " ".join(expected.split()).casefold()
+    status = ("Missing recorded location" if not actual else "Recorded — not verified" if match is None
+              else "Matches recorded expectation" if match else "Different from recorded expectation")
+    return {"actual": actual, "expected": expected, "match": match, "status": status,
+            "stage": event.get("event_type"), "event_id": event.get("event_id"),
+            "custodian": payload.get("custodian_name"), "sender": payload.get("sender_name"),
+            "receiver": payload.get("receiver_name", payload.get("recipient_name"))}
+
+
 def compare_handoff(
     db_path: str = "data/parcelverify.db",
     shipment_id: str = "",
@@ -81,7 +123,7 @@ def compare_handoff(
                 'collection', 'transit_submitted', 'transit_handoff', 'transit', 'pod_submitted')
                 OR (event_type='weight_measured' AND source LIKE 'task_response:%'))
                 AND (? IS NULL OR julianday(occurred_at) <= julianday(?))
-                ORDER BY julianday(occurred_at) DESC""", (shipment_id, cutoff, cutoff)).fetchall()
+                ORDER BY julianday(occurred_at) DESC, julianday(received_at) DESC, rowid DESC""", (shipment_id, cutoff, cutoff)).fetchall()
             handoff = next((row for row in candidates if any(key in json.loads(row[0]) for key in measurement_keys)), None)
 
         no_measurements = handoff is None
@@ -92,7 +134,8 @@ def compare_handoff(
         actual_count = payload.get("count")
         actual_weight = payload.get("weight_g")
         actual_seal = payload.get("seal_id")
-        handoff_location = payload.get("handoff_location")
+        location_row = conn.execute("SELECT event_id, event_type, payload_json FROM events WHERE event_id = ? AND shipment_id = ?", (handoff[1], shipment_id)).fetchone()
+        location = evidence_fields(dict(zip(("event_id", "event_type", "payload_json"), location_row))) if location_row else evidence_fields({})
 
         # Count comparison
         count_match = None
@@ -205,6 +248,14 @@ def compare_handoff(
                 "authorized": recipient_authorized,
             },
             "measurement_event_id": handoff[1],
+            "location": location,
+            "delivery_location": {
+                "expected": f"GPS {dest_lat}, {dest_lon}" if destination_valid else None,
+                "actual": f"GPS {actual_lat}, {actual_lon}" if pod and gps_valid else None,
+                "status": ("No delivery location recorded" if not pod or not gps_valid else
+                           "Recorded — not verified" if not destination_valid else
+                           "More than 50 km from destination" if location_conflict else "Within 50 km of destination"),
+            },
             "recipient_evidence_ids": recipient_refs,
             "location_conflict": location_conflict,
             "time_conflict": time_conflict,

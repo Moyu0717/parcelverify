@@ -276,16 +276,8 @@ class InvestigationResult(BaseModel):
 # Tool Whitelist (D-014 — actor_context always from session)
 # ============================================================
 
-TOOL_WHITELIST: list[str] = [
-    "get_case_context",
-    "get_vendor_context",
-    "get_shipment_timeline",
-    "compare_handoff",
-    "find_photo_reuse",
-    "check_access_scope",
-    "get_context_events",
-    "get_partner_metrics",
-]
+from agent.tool_registry import TOOL_REGISTRY
+TOOL_WHITELIST: list[str] = list(TOOL_REGISTRY)
 
 # Scoring map — max one per category per case, cap 100
 SCORING_MAP: dict[str, int] = {

@@ -233,6 +233,8 @@ _TOOL_DISPATCH = {
     "get_context_events": _get_context_events,
     "get_partner_metrics": _get_partner_metrics,
 }
+from agent.tool_registry import TOOL_REGISTRY,validate_tool_arguments
+assert set(_TOOL_DISPATCH)==set(TOOL_REGISTRY), 'Tool implementation registry drift'
 
 
 def authorize_case(conn, case_id, actor):
@@ -293,16 +295,8 @@ def dispatch_tool(db_path, tool_name, params, case_context, actor_context):
         if not case_id:
             raise ValueError("missing_case_id")
         shipment_id, partner_id = authorize_case(conn, case_id, actor)
-        if tool_name not in TOOL_WHITELIST:
-            raise ValueError(f"unknown_tool: {tool_name}")
-        if not isinstance(params, dict):
-            raise ValueError("Tool params must be an object")
-        allowed = {"photo_id"} if tool_name == "find_photo_reuse" else ({"at_time"} if tool_name == "get_vendor_context" else set())
-        if set(params) - allowed:
-            raise ValueError("Unexpected tool parameters; scope is server controlled")
-        if "at_time" in params:
-            from datetime import datetime
-            datetime.fromisoformat(params["at_time"].replace("Z", "+00:00"))
+        if tool_name not in TOOL_REGISTRY:raise ValueError('unknown_tool: '+str(tool_name))
+        validate_tool_arguments(tool_name,params)
         if tool_name == "find_photo_reuse":
             photo_id = params.get("photo_id")
             from services.cases import get_case_context

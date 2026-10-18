@@ -157,3 +157,36 @@ def _in_period(value: str | None, start: str | None, end: str | None) -> bool:
         return False
     when = _parse_time(value)
     return (not start or when >= _parse_time(start)) and (not end or when < _parse_time(end))
+
+
+def summarize_permitted_shipments(db_path: str, shipment_ids) -> dict:
+    """All-history review context for an already permission-filtered cohort.
+
+    Category recurrence counts distinct shipments, not repeated case records.
+    A supported finding is a human-recorded outcome, never a fraud verdict.
+    """
+    from services.handoff import compare_handoff
+    ids = sorted(set(shipment_ids))
+    categories, affected = {}, set()
+    open_findings = supported = resolved = 0
+    with get_connection(db_path) as conn:
+        for sid in ids:
+            for category, state in conn.execute(
+                "SELECT f.category,r.outcome FROM case_findings f "
+                "JOIN case_records c ON c.case_id=f.case_id "
+                "LEFT JOIN finding_reviews r ON r.finding_id=f.finding_id "
+                "WHERE c.shipment_id=?", (sid,)
+            ):
+                if category == 'authorized_export':
+                    continue
+                affected.add(sid)
+                categories.setdefault(category, set()).add(sid)
+                open_findings += state in (None, 'unresolved')
+                supported += state == 'supported'
+                resolved += state == 'resolved'
+    missing = sum(bool(compare_handoff(db_path, sid)['unknowns']) for sid in ids)
+    return dict(total_shipments=len(ids), affected_shipments=len(affected),
+                recurring_categories={key: len(value) for key, value in sorted(categories.items())},
+                open_findings=open_findings, supported_findings=supported, resolved_findings=resolved,
+                complete_shipments=len(ids)-missing, missing_evidence_shipments=missing,
+                small_sample=len(ids) < DISPLAY_THRESHOLD_SHIPMENTS)

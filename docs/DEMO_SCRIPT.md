@@ -1,13 +1,69 @@
-# Five-minute English demonstration
+# Local demonstration — 18 October 2026
 
-**0:00–0:45 — Home.** “ParcelVerify helps us compare shipment evidence and unusual partner account access. A discrepancy tells us to check the records; it does not prove wrongdoing.” Show the three status shortcuts and open Compare weights directly from the first issue.
+All records, identities and operations are synthetic. No external message is
+sent. See `AI_UI_FIX_VERIFICATION.md` for the latest deployment and live acceptance status.
 
-**0:45–1:45 — Evidence first.** “The dispatch expectation is 2.00 kg; the handover record is 1.85 kg. That is 150 g lower.” Show stage, source, time and supporting demonstration photos. Enlarge a photo, then inspect all checks and source records. Missing evidence remains unconfirmed.
+## Start
 
-**1:45–3:00 — Request and decision.** “A new weight check would help. This draft states the recorded difference. Sending it saves a proposal for an authorized supervisor; it does not contact the partner.” Send request for approval. Approve separately, then Apply approved step. Show the new local evidence task and Activity. Explain that rejection prevents application and that closure is a separate audited manual disposition.
+From the repository run `.venv\Scripts\python.exe -X utf8 start.py`, then open
+`http://localhost:8501`. A browser gets an isolated demo workspace. Preserve an
+existing workspace with its private recovery token and audit export. Without a
+privately configured Groq key, evidence checks and human review still work.
 
-**3:00–3:35 — AI availability.** “Explain this issue with AI can summarize retrieved evidence and suggest a check. If the provider is unavailable, we can continue manually.” Never claim successful inference from a disabled button or a failed run. Use supporting source records to verify any live explanation.
+## Gate 1: permitted and denied access
 
-**3:35–4:20 — Access and legitimate explanations.** Back to Issues, select Data access, open Review access. Compare the requesting account, assignment and denied outcome; business context still needs review. Find PV-SHIP-011 and inspect the approved packaging change and linked measurements.
+Open Workspace → Settings → Demo tools. Select **Partner**, **QuickRun Logistics**,
+and check `PV-DEMO-001`: assignment permits minimized data. Select **SafeLog Express**
+and check the same shipment: denial returns no parcel details. Return to
+**Administrator**, inspect Administrative logs and the access case. Demo roles
+illustrate server permissions; they are not production authentication.
 
-**4:20–5:00 — Partners and limits.** Partners shows distinct shipments and independent open issues; more than one issue can concern a shipment. Workspace > Settings > Demo tools contains simulated identities and private recovery-token controls. “No message is sent to a carrier. Demo storage can disappear on host rebuild and expires after inactivity. Export the issue summary and keep recovery tokens private.”
+## Gate 2 and three controls
+
+1. Home → **Compare weights**: `PV-DEMO-001` has 2.00 kg before dispatch and
+   1.85 kg at handover. Show the recorded hub, unknown stage expectation/identities,
+   MYT event/upload times and exact photo pair with `PV-SHIP-010`. Identical bytes
+   establish reuse, not intent or parcel contents. Later account access is labelled
+   post-delivery and does not establish the cause of the earlier weight difference.
+2. Cases → search `PV-SHIP-011` → **Find shipment**. Inspect approved packaging,
+   linked measurements and the authorized export scope. High volume alone is not
+   misconduct; explanations must be supported by records.
+3. Find `PV-SHIP-021`, or Home → Waiting for evidence. Missing measurements remain
+   unknown and are not a confirmed discrepancy.
+
+## Approval, task, response, review and closure
+
+1. Select **Investigator**. Open `PV-DEMO-001`, enter a meaningful reason and choose
+   **Send request for approval** for a new weight check.
+2. Select **Supervisor**. Confirm the evidence was reviewed, enter a decision reason,
+   then **Approve request** and **Apply approved step**. One approved action creates
+   one task; retries cannot create another.
+3. Select the assigned **QuickRun Partner** or Investigator. Expand **Supply
+   evidence**, enter actual kg, context and the actual observation timestamp with
+   timezone, such as `2026-10-18T14:30:00+08:00` only if that was the real observation
+   time. Submit once. Server receipt time is separate.
+4. Return to Supervisor, enter a review reason and choose **Request more**. Submit
+   revised supporting context under the same observation time if appropriate,
+   then **Accept evidence**. A supervisor may also request a supplementary statement
+   before approving: the pending proposal and its clarification task remain usable.
+5. Review findings independently. A fresh 2.00 kg reading does not prove the earlier
+   difference harmless or resolve photo/access findings. Verified closure requires
+   documented evidence/outcomes; otherwise choose **Closed unresolved** with an
+   explicit reason and confirmation.
+6. Expand **Activity**, download the summary and audit, and inspect actors, reasons,
+   linked sources and transitions. Demonstrate rejection on a separate proposal:
+   **Reject request** must prevent execution.
+
+## Optional AI and partner context
+
+Configure `GROQ_API_KEY` privately in `.streamlit/secrets.toml` using the example
+template. Never share the key. Settings and cases derive the same availability;
+a present credential does not prove a working connection. Click **Review evidence
+with AI** once. If successful, inspect actual tools and cited facts. Mocks never
+appear as product reports. Failure leaves manual review usable and diagnostics
+restricted to administrators.
+
+Partners shows all recorded history, permitted shipment denominator, affected
+shipments/categories, missing fields, human outcomes and sample caveats. Field
+completeness does not verify contents. See `AI_UI_FIX_VERIFICATION.md` for exact
+checks, the missing local credential and the unmeasured human evaluation protocol.

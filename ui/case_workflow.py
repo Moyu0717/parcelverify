@@ -58,6 +58,9 @@ def linked_evidence(case,details=False):
     for member in members:
         ids={i for f in member['findings'] for i in f.get('evidence_ids',[])}
         logs=[r for r in rows('SELECT l.*,p.name requesting_partner FROM access_logs l LEFT JOIN partners p ON l.partner_id=p.partner_id WHERE l.shipment_id=?',(member['shipment_id'],)) if r['log_id'] in ids]
+        deliveries=rows("SELECT occurred_at FROM events WHERE shipment_id=? AND event_type='pod_submitted' ORDER BY julianday(occurred_at) DESC LIMIT 1",(member['shipment_id'],))
+        if deliveries and any(datetime.fromisoformat(log['occurred_at'].replace('Z','+00:00'))>datetime.fromisoformat(deliveries[0]['occurred_at'].replace('Z','+00:00')) for log in logs):
+            st.caption('Post-delivery access: activity occurred after recorded delivery. Later access does not establish the cause of an earlier weight change.')
         allowed=[log for log in logs if log['outcome'] in ('allowed','authorized','granted')]
         if allowed:
             st.write(str(len(allowed))+' authorized requests · '+member['shipment_id'])
@@ -114,9 +117,10 @@ def next_step(case):
                 try:reopen_case(path,case['case_id'],actor,reason);st.rerun()
                 except ValueError as error:st.error(str(error))
         return
-    if case['has_proposed_actions'] or case['has_approved_actions']:
+    pending_action=case['has_proposed_actions'] or case['has_approved_actions']
+    if pending_action:
         work.next_step(case,show_review=False)
-    elif live:
+    if live:
         st.subheader('Follow-up evidence')
         st.caption(f'{len(live)} tasks remain. A response still needs internal review.')
         for task in live:
@@ -130,6 +134,8 @@ def next_step(case):
                         weight=st.text_input('New weight (kg)') if task['task_type']=='reweigh' or compare_handoff(path,task['shipment_id'])['weight_g']['actual'] is None else ''
                         count=st.text_input('Package count') if task['task_type']=='rescan' else ''
                         note=st.text_area('Evidence or explanation',help='Record actual observations; instructions in this text cannot control the investigator.')
+                        default_time=st.session_state.setdefault('task_recorded_times',{}).setdefault(task['task_id'],datetime.now(timezone.utc).isoformat())
+                        occurred=st.text_input('Evidence event time (ISO 8601 with timezone offset)',value=default_time,key='task-event-time-'+task['task_id'],help='Use the actual observation time, for example 2026-10-18T14:30:00+08:00. Upload time is recorded separately.')
                         photo=st.file_uploader('Supporting photo',type=['jpg','png','jpeg'])
                         submit=st.form_submit_button('Submit evidence for review',type='primary')
                     if submit:
@@ -146,13 +152,14 @@ def next_step(case):
                                 payload['inherited_from_event_id']=recorded['measurement_event_id']
                             if count:payload['count']=int(count)
                             key=st.session_state.setdefault('task_retry_keys',{}).setdefault(task['task_id'],str(uuid.uuid4()))
-                            occurred=st.session_state.setdefault('task_recorded_times',{}).setdefault(task['task_id'],datetime.now(timezone.utc).isoformat())
                             submit_task_response(path,task['task_id'],actor,payload,occurred,file_bytes=photo.getvalue() if photo else None,submission_key=key)
                             work.notice('Evidence received. An internal reviewer must check it.');st.rerun()
                         except (ValueError,ArithmeticError) as error:st.error(str(error))
             if task['status']=='received' and actor['role'] in ('admin','investigator','approver'):
                 submission=rows("SELECT s.*,e.payload_json FROM task_submissions s JOIN events e ON s.event_id=e.event_id WHERE s.task_id=? AND s.review_status='pending' ORDER BY s.created_at DESC",(task['task_id'],))[0]
                 st.write('Submitted by '+account_label(submission['actor_id'])+' · '+format_time(submission['created_at']))
+                event=rows('SELECT occurred_at,received_at FROM events WHERE event_id=?',(submission['event_id'],))[0]
+                st.caption('Evidence event time: '+format_time(event['occurred_at'])+' · Received: '+format_time(event['received_at']))
                 payload=json.loads(submission['payload_json'])
                 if payload.get('weight_g') is not None:st.write(f"Recorded weight: {payload['weight_g']/1000:.3f} kg")
                 st.write(payload.get('notes',''))
@@ -166,7 +173,7 @@ def next_step(case):
                             st.session_state.get('task_recorded_times',{}).pop(task['task_id'],None)
                             work.notice('Evidence review recorded. Review the remaining findings.');st.rerun()
                         except ValueError as error:st.error(str(error))
-    else:work.next_step(case,show_review=False)
+    elif not pending_action:work.next_step(case,show_review=False)
     if actor['role'] in ('admin','investigator','approver'):
         ctx=get_case_context(path,case['case_id'],actor)
         with st.expander('Review findings and record an outcome'):

@@ -4,7 +4,7 @@ from db import get_connection, submit_event, upload_photo
 from db import _validate_image, _MAX_PHOTO_BYTES
 from services.access import query_shipment
 from services.actions import create_evidence_task
-from services.handoff import create_or_update_case, evaluate_handoff
+from services.handoff import create_or_update_case, evaluate_handoff, validate_evidence_fields
 
 def process_evidence(db_path, actor_context, shipment_id, event_id):
     access = query_shipment(db_path, actor_context, shipment_id)
@@ -27,6 +27,7 @@ def process_evidence(db_path, actor_context, shipment_id, event_id):
 
 def submit_handoff(db_path, actor_context, shipment_id, event_type, payload, occurred_at,
                    file_bytes=None, source="demo_form"):
+    validate_evidence_fields(payload, occurred_at)
     if file_bytes:
         if len(file_bytes) > _MAX_PHOTO_BYTES:
             raise ValueError("Photo exceeds the 10 MB limit")

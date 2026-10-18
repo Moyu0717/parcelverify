@@ -112,6 +112,9 @@ def help_page():
     st.write("3. Submit the next step for approval, or record an authorized review decision.")
     st.info("Groq explanations are optional. Review the evidence and use the human approval workflow when AI is unavailable.")
     st.caption("Operational actions and identities are simulated. Demonstration images are not verified parcel photographs. Flags need review; they do not prove wrongdoing.")
+    st.subheader('Try both checks')
+    st.write('Data access: open Workspace → Settings → Demo tools. Select Partner / QuickRun Logistics and check PV-DEMO-001. Then select SafeLog Express and repeat: access is denied without parcel details. Return to Administrator to inspect the recorded denial.')
+    st.write('Shipment evidence: open Cases and find PV-DEMO-001 for the weight/photo case, PV-SHIP-011 for a documented packaging explanation and authorized export, or PV-SHIP-021 for missing evidence. Later account access is labelled separately from the earlier delivery.')
 
 def main():
     apply_theme()

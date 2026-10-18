@@ -168,7 +168,7 @@ def review_action(
         # Audit the review
         append_audit(
             db_path, actor.actor_id, case_id,
-            f"action_{decision}d",
+            "action_approved" if decision == "approve" else "action_rejected",
             {"action_id": action_id, "action_type": action_type, "reason": reason,
              "request_fingerprint":hashlib.sha256(json.dumps([action_id,action_type,target_id,conn.execute('SELECT reason FROM action_requests WHERE action_id=?',(action_id,)).fetchone()[0]]).encode()).hexdigest()},
             tx=conn,

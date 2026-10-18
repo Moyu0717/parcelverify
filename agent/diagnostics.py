@@ -14,6 +14,8 @@ def safe_provider_message(message):
     This is an excerpt, not a claim about the cause of an older HTTP-only run.
     """
     if not isinstance(message,str):return None
+    if re.search(r'not in request\s*\.\s*tools',message,re.I):
+        return 'The model requested a function not declared in request.tools.'
     patterns=[
         r'Tool choice is none, but (?:the )?model called a tool\.?',
         r'Failed to generate (?:JSON|a valid JSON|tool calls?)[^.]*\.',

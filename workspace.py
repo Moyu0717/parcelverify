@@ -5,6 +5,7 @@ import secrets
 import shutil
 import time
 import threading
+from contextlib import closing
 from pathlib import Path
 from db import init_db
 from seed import seed_demo
@@ -27,9 +28,10 @@ def _prepare_template():
             from services.workflow import initialize_reviews
             initialize_reviews(str(temporary), {"actor_id": "SYSTEM-DEMO", "role": "admin", "session_id": "synthetic-template"})
             from db import get_connection
-            with get_connection(str(temporary)) as conn:
-                conn.execute('CREATE TABLE IF NOT EXISTS demo_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
-                conn.execute('INSERT OR REPLACE INTO demo_metadata VALUES (?,?)', ('dataset_version', DATASET_VERSION))
+            with closing(get_connection(str(temporary))) as conn:
+                with conn:
+                    conn.execute('CREATE TABLE IF NOT EXISTS demo_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                    conn.execute('INSERT OR REPLACE INTO demo_metadata VALUES (?,?)', ('dataset_version', DATASET_VERSION))
             os.replace(temporary, template)
     return template
 

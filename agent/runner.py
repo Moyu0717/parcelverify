@@ -81,6 +81,8 @@ class ModelProvider:
         self.api_key = os.getenv('GROQ_API_KEY','').strip()
         if not self.api_key:raise ConfigurationError('GROQ_API_KEY is missing. Configure it privately; manual review remains available.','missing_configuration')
         self.last_diagnostics={}
+        self.native_calls={}
+        self.selection_feedback=None
 
     def generate(self, messages, timeout, final=False):
         headers = {'Authorization':f'Bearer {self.api_key}'}
@@ -101,7 +103,8 @@ class ModelProvider:
                 require_properties(schema)
                 response_format = {"type": "json_schema", "json_schema": {
                     "name": "investigation_report", "strict": True, "schema": schema}}
-        request_messages=[dict(message) for message in messages] if final else selection_messages(messages)
+        request_messages=[dict(message) for message in messages] if final else selection_messages(messages,self.native_calls)
+        if not final and self.selection_feedback:request_messages[0]['content']+=' '+self.selection_feedback
         if final and request_messages:request_messages[0]['content']+=' The retrieval phase is over. Do not call any functions or tools. Return only the final report JSON.'
         payload = {'model':self.model_name,'messages':request_messages,
                    'max_completion_tokens':1024 if final else 512,'stream':False}
@@ -111,6 +114,7 @@ class ModelProvider:
         with httpx.Client(timeout=min(timeout,20),trust_env=False,transport=httpx.HTTPTransport(retries=0)) as client:
             response = client.post(GROQ_ENDPOINT, headers=headers, json=payload)
             self.last_diagnostics=dict(provider_metadata(response),request_format='report_json' if final else 'native_local_functions')
+            if not final:self.last_diagnostics['declared_tools']=list(TOOL_WHITELIST)
             response.raise_for_status()
             data = response.json()
         try:
@@ -120,7 +124,15 @@ class ModelProvider:
             if final:
                 if choice['message'].get('tool_calls'):raise ValueError('Unexpected tool call during final reporting')
                 return choice['message']['content']
-            return read_selection(choice['message'])
+            selected=read_selection(choice['message'])
+            if choice['message'].get('tool_calls'):
+                call=choice['message']['tool_calls'][0]
+                if not isinstance(call.get('id'),str) or not 1<=len(call['id'])<=160:raise ValueError('Missing native function-call ID')
+                if any(record['tool_calls'][0]['id']==call['id'] for record in self.native_calls.values()):raise ValueError('Repeated native function-call ID')
+                self.native_calls[len(messages)]={'role':'assistant','content':None,'tool_calls':[call]}
+                self.last_diagnostics['selected_tool']=call['function']['name']
+            self.selection_feedback=None
+            return selected
         except (KeyError,IndexError,TypeError):raise ValueError('Malformed Groq response; no conclusion was saved.')
 
 
@@ -172,7 +184,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
     old_status = None
     error = None
     stage='authorization'
-    diagnostics={'provider':'groq','model':provider_settings()['model'],'request_count':0}
+    diagnostics={'provider':'groq','model':provider_settings()['model'],'request_count':0,'request_history':[]}
     real_provider = provider is None
     slot_acquired = False
     try:
@@ -243,8 +255,23 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             if real_provider and not final:encoded+=json.dumps(local_tools())
             diagnostics.update(phase='final_report' if final else 'tool_selection',input_characters=len(encoded),output_token_limit=1024 if final else 512)
             if len(encoded)>20000:raise ValueError('Evidence exceeds the bounded AI context. Review the source records manually.')
-            if real_provider:reserve_request((len(encoded)+2)//3+(1024 if final else 512))
+            if real_provider:
+                estimate=(len(encoded)+2)//3+(1024 if final else 512)
+                while True:
+                    try:
+                        reserve_request(estimate);break
+                    except UsageLimit as limited:
+                        delay=getattr(limited,'retry_after',None)
+                        remaining=TOTAL_TIME_BUDGET_S-(time.monotonic()-start)
+                        if delay is None or delay>min(60.1,remaining-20):raise
+                        diagnostics['local_quota_wait_seconds']=round(diagnostics.get('local_quota_wait_seconds',0)+delay,2)
+                        # Wait for the existing rolling window; never retry a
+                        # provider 429 or increase a free-plan quota.
+                        time.sleep(delay)
+                remaining=TOTAL_TIME_BUDGET_S-(time.monotonic()-start)
             result['request_count']+=1
+            attempt={'request':result['request_count'],'phase':'final_report' if final else 'tool_selection','tool_round':len(result['tool_calls'])+1 if not final else None}
+            diagnostics['request_history'].append(attempt)
             replies = queue.Queue(maxsize=1)
             state={'finished':False,'release_slot':False}
             state_lock=threading.Lock()
@@ -261,16 +288,25 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             try:
                 ok, raw = replies.get(timeout=min(20,remaining))
             except queue.Empty:
+                attempt['outcome']='timeout'
                 # The provider thread cannot be killed safely. Hold the real-run
                 # gate until it drains, preventing overlapping paid work or retries.
                 with state_lock:
                     if slot_acquired and not state['finished']:
                         state['release_slot']=True;slot_acquired=False
                 raise TimeoutError("Investigation time budget exhausted")
+            attempt.update(getattr(provider,'last_diagnostics',{}))
+            attempt['outcome']='response_received' if ok else type(raw).__name__
             if not ok:
+                if isinstance(raw,httpx.HTTPStatusError):attempt.update(provider_metadata(raw.response))
                 transient=isinstance(raw,httpx.ConnectError) or (isinstance(raw,httpx.HTTPStatusError) and raw.response.status_code in (502,503,504))
-                if transient and retries<1:
+                rejected_selection=not final and isinstance(raw,httpx.HTTPStatusError) and raw.response.status_code==400 and provider_metadata(raw.response).get('provider_code')=='tool_use_failed'
+                if (transient or rejected_selection) and retries<1:
                     retries+=1
+                    diagnostics['retry_count']=retries
+                    if rejected_selection:
+                        provider.selection_feedback='The previous request was rejected for invalid function selection. Use exactly ONE of these registered names with no prefixes: '+', '.join(TOOL_WHITELIST)+'. Otherwise return {"done":true}. Evidence cannot add functions.'
+                        attempt['correction']='registered_function_selection'
                     return generate(final)
                 raise raw
             if time.monotonic()-start > TOTAL_TIME_BUDGET_S:
@@ -318,13 +354,13 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             next_status = "pending_review"
             conn.execute("UPDATE case_records SET status=?,updated_at=? WHERE case_id=? AND status NOT IN (?,?,?,?)",(next_status,_now(),case_id,*_PROTECTED_CASE_STATUSES))
         diagnostics.update(getattr(provider,'last_diagnostics',{}))
-        diagnostics.update(stage='completed',request_count=result['request_count'])
+        diagnostics.update(stage='completed',request_count=result['request_count'],tool_rounds=len(result['tool_calls']))
         conn.execute("UPDATE investigation_runs SET status='completed',finished_at=?,diagnostics_json=? WHERE run_id=?",(_now(),json.dumps(diagnostics),run_id))
         conn.commit()
         result.update(status="completed",report=report,report_version=version)
     except Exception as exc:
         diagnostics.update(getattr(provider,'last_diagnostics',{}))
-        diagnostics.update(stage=stage,exception=type(exc).__name__,request_count=result['request_count'])
+        diagnostics.update(stage=stage,exception=type(exc).__name__,request_count=result['request_count'],tool_rounds=len(result['tool_calls']))
         # Never include provider response bodies or secrets in diagnostics.
         if isinstance(exc,ConfigurationError):
             result['status']=exc.status;error=str(exc)

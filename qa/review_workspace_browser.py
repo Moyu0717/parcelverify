@@ -6,10 +6,11 @@ ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'qa/artifacts/review-workspace'
 sys.path.insert(0,str(ROOT))
 from services.access import query_shipment
+from release_info import build_information
 
 def main():
     OUT.mkdir(parents=True,exist_ok=True)
-    result={'scope':'Local synthetic fixtures; no AI requests or hosted verification','before_provenance':{'directory':'qa/artifacts/design-rebuild','recorded_date':'2026-10-14','commit':'69915b8865de906144478034d4ca3584859f4638','viewports':['1440x900','390x844'],'note':'Historical actual before screenshots, not a fresh current baseline'},'checks':[]}
+    result={'scope':'Local synthetic fixtures; no AI requests or hosted verification','build':build_information(),'before_provenance':{'directory':'qa/artifacts/design-rebuild','recorded_date':'2026-10-14','commit':'69915b8865de906144478034d4ca3584859f4638','viewports':['1440x900','390x844'],'note':'Historical actual before screenshots, not a fresh current baseline'},'checks':[]}
     with tempfile.TemporaryDirectory(prefix='parcelverify-review-') as directory:
         env=dict(os.environ,PV_DATA_DIR=directory,AI_PROVIDER='disabled',AI_EXECUTION_ENABLED='false')
         for key in ('GROQ_API_KEY','GEMINI_API_KEY','PV_AI_API_KEY'):env.pop(key,None)
@@ -55,7 +56,11 @@ def main():
                         page.get_by_role('button',name=re.compile('Compare weights')).first.click()
                         page.get_by_role('heading',name='Check a weight difference',exact=True).wait_for()
                         page.get_by_text('The same photo file appears on both shipment records',exact=True).wait_for()
+                        assert page.get_by_text(re.compile('Recorded stage location: Hub [A-D]')).is_visible()
+                        assert page.get_by_text(re.compile('Post-delivery access:')).count()
                         capture('linked-case')
+                        page.get_by_text(re.compile('Recorded stage location: Hub [A-D]')).evaluate("element => element.scrollIntoView({block:'start'})")
+                        capture('handoff-facts')
                         assert page.get_by_role('heading',name='Account activity',exact=True).count()==1
                         assert not page.get_by_text(re.compile('permitted near-image candidates')).is_visible()
                         page.get_by_role('heading',name='Compare the recorded photos',exact=True).evaluate("element => element.scrollIntoView({block:'start'})")
@@ -79,6 +84,12 @@ def main():
                         page.get_by_role('button',name=re.compile('Back to cases')).wait_for()
                         assert page.get_by_role('heading',name='Account activity',exact=True).count()==0
                         capture('shipment-case')
+                        if width==390:
+                            page.get_by_role('button',name=re.compile(r'\bMenu\b')).click()
+                            page.get_by_role('button',name='Partners',exact=True).last.click()
+                        else:page.get_by_role('button',name='Partners',exact=True).click()
+                        page.get_by_text(re.compile('Finding outcomes:')).first.wait_for()
+                        capture('partners')
                         context.close()
                     browser.close()
                 result['status']='passed'

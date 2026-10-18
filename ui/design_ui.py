@@ -171,8 +171,13 @@ def weight_evidence(case):
                 st.html('<div class="weight-value"><span>'+label+'</span><strong>'+format_weight(weight)+'</strong></div>')
                 st.caption((stage_label(event["event_type"])+" · "+format_time(event["occurred_at"])) if event else "Stage record missing")
                 st.caption("Source: "+humanize(event["source"]) if event else "Source: shipment expectation only")
+                if event:st.caption('Uploaded: '+format_time(event['received_at']))
         st.html('<div class="weight-result"><span>RECORDED DIFFERENCE</span><strong>'+esc(difference_weight(value["weight_g"]["diff"]))+'</strong></div>')
     st.write("The latest weight matches the expectation; review the original signal and subsequent evidence before closing." if value['weight_g']['match'] else "The recorded weights differ. Check the source records and any packaging change before deciding why.")
+    location=value.get('location',{})
+    st.write('Recorded stage location: '+str(location.get('actual') or 'Unknown')+' · Expected here: '+str(location.get('expected') or 'Unknown'))
+    st.caption(location.get('status','Recorded — not verified')+'. Stage locations are separate from the delivery destination.')
+    st.caption('Custodian: '+str(location.get('custodian') or 'Unknown')+' · Sender: '+str(location.get('sender') or 'Unknown')+' · Receiver: '+str(location.get('receiver') or 'Unknown'))
     with st.expander('How the weight comparison works'):
         st.caption('Rule tolerance: the larger of 100 g or 5% of the earlier weight. Display precision preserves recorded differences; a small difference can still match within tolerance.')
     for event in source:
@@ -248,6 +253,7 @@ def access_evidence(case):
 
 
 def partners():
+    from services.risk import summarize_permitted_shipments
     st.title("Delivery partners")
     st.write("Review the carriers, warehouses and delivery operators working with your company.")
     st.caption("All recorded history · counts include only your permitted shipments and issues")
@@ -256,15 +262,19 @@ def partners():
     for partner in rows("SELECT partner_id,name FROM partners ORDER BY name"):
         population={s["shipment_id"] for s in rows("SELECT shipment_id FROM shipments WHERE partner_id=?",(partner["partner_id"],))}&allowed
         if not population:continue
+        summary=summarize_permitted_shipments(context()[0],population)
         related=[c for c in cohort if c["partner_id"]==partner["partner_id"] and c["work_bucket"] in ("needs_review","awaiting_approval","waiting_evidence")]
         with st.container(key="partner-directory-"+partner["partner_id"]):
             info,stats,action=st.columns([2.4,2,1.1],vertical_alignment="center")
             info.html('<div class="partner-name"><span>↗</span><h2>'+esc(partner["name"])+'</h2></div>')
             affected={sid for c in related for sid in c.get('shipment_ids',[c['shipment_id']])}&population
             stats.write(f"**{len(population)} shipments · {len(related)} open cases**")
-            stats.caption(f"Affected shipments: {len(affected)} / {len(population)}. Waiting tasks: {sum(c.get('open_task_count',0) for c in related)}.")
-            recurring=sorted({f['category'].replace('_',' ') for c in related for f in c.get('linked_findings',[])})
-            if recurring:stats.caption('Findings: '+', '.join(recurring))
+            stats.caption(f"Shipments with recorded findings: {summary['affected_shipments']} / {len(population)}. Waiting tasks: {sum(c.get('open_task_count',0) for c in related)}.")
+            stats.caption(f"Evidence complete: {summary['complete_shipments']} / {len(population)}; missing required evidence: {summary['missing_evidence_shipments']}. Completeness is not verification.")
+            stats.caption(f"Finding outcomes: {summary['open_findings']} unreviewed or unresolved; {summary['supported_findings']} supported; {summary['resolved_findings']} resolved by human review.")
+            recurring=[humanize(key)+f' ({count} shipments)' for key,count in summary['recurring_categories'].items()]
+            if recurring:stats.caption('Recorded categories: '+', '.join(recurring))
+            if summary['small_sample']:stats.caption('Small sample: these counts do not support a reliable partner comparison or a misconduct conclusion.')
             if action.button("View partner",key="partner-"+partner["partner_id"],use_container_width=True):st.session_state.selected_partner_id=partner["partner_id"];st.rerun()
         if selected==partner["partner_id"]:
             with st.container(key="partner-profile"):
@@ -274,7 +284,7 @@ def partners():
                 now=datetime.now(timezone.utc)
                 past=[e["occurred_at"] for e in recorded if datetime.fromisoformat(e["occurred_at"].replace("Z","+00:00"))<=now]
                 future=len(recorded)-len(past)
-                st.write("Latest activity at or before now: "+format_time(max(past) if past else None))
+                st.write("Latest evidence event time at or before now: "+format_time(max(past,key=lambda value:datetime.fromisoformat(value.replace('Z','+00:00'))) if past else None))
                 if future:st.info(f"{future} source records have future timestamps and need timing review. Original records are retained.")
                 issue_header()
                 for case in sorted(related,key=lambda c:c["priority_score"] or 0,reverse=True)[:3]:issue_row(case)

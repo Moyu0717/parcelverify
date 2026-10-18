@@ -1,4 +1,172 @@
-# AI review and workspace verification — 16 October 2026
+# AI review and workspace verification
+
+## Authorized Cloud delivery — 18 October 2026
+
+The updated fix plan authorizes the existing application at
+`https://parcelverify-fhu5hezcatyb5ko932spwg.streamlit.app/`. The baseline was
+independently read from the public app: repository `Moyu0717/parcelverify`,
+matching `main` commit `3003b9dcacf03884da3310d61a0f50e9d32e11ed`, entry `app.py`,
+dataset `linked-cases-v5`, Groq credentials present and execution enabled. No
+provider call was made during baseline inspection. The local directory still
+has no Git metadata; GitHub's connected Git data API preserves the remote base
+tree and updates main with an expected-head lease, never a force push.
+
+Candidate release: `groq-repair-20261018.1`. Deployment and live acceptance are
+pending until their actual results are appended here. The local-only statements
+in the next section describe the earlier implementation phase, not the current
+authorization. The URL, audience, server Secrets and existing data are preserved.
+
+Pinned dependencies are reused. Runtime identification exposes Python and entry
+point without secrets. Bundled images resolve from the project directory;
+Pillow's built-in font is the Linux fallback. Writable data stays below
+`PV_DATA_DIR` or the repository's `data/workspaces`, with separate random-token
+workspace databases and repeatable additive migrations. The shared Groq ledger
+stores usage counts, not credentials or case contents. No mutable role/case state
+is cached across sessions. Local disk remains ephemeral; recovery/export limits
+from the earlier section still apply.
+
+## Current local repair — 18 October 2026
+
+Release: `local-repair-20261018.1`, source build `fb07b8f0e37690c8`. This round is local only: no Git push,
+public deployment, provider/billing change, external message or existing-data
+reset. No applicable `AGENTS.md` was found in the repository or its ancestors.
+The workspace has no `.git` metadata; changed files remain available in place.
+
+### What was confirmed, reused and still unverified
+
+The latest owner's native-function run fetched `get_case_context` successfully,
+then Groq rejected request 2 with HTTP 400 / `tool_use_failed` /
+`invalid_request_error`, message suffix `not in request.tools`. This is **not**
+the older first-request/no-tools failure described in the historical section.
+Current continuation code already retained all eight tool definitions and
+paired IDs. Missing continuation tools is therefore not an established cause.
+The confirmed failure is provider-side rejection of an unregistered generated
+function. The exact rejected name was removed by the old sanitizer and cannot
+be reconstructed from that record. A namespace/name mismatch remains a
+hypothesis, not an observed literal function name.
+
+Deterministic mocked HTTP reproduces the observed sequence: a successful context
+read, an unregistered-function rejection on request 2, and either a valid
+continuation or a repeated rejection. The repair provides:
+
+- One canonical `agent/tool_registry.py` for names, descriptions, schemas and
+  arguments, consumed by contracts, provider declarations and dispatch.
+- Original provider function IDs retained in correctly paired tool messages.
+- Exactly one correction retry for a selection-phase `tool_use_failed`; this
+  shares the existing one-retry allowance with transient failures. There are
+  still at most four executed tool rounds and six requests. No retry for quota,
+  authentication, unauthorized data, fabricated citations or invalid arguments.
+- A closed list of exact function names in correction feedback. Evidence cannot
+  introduce functions. Unknown calls are never aliased or executed.
+- Separate request history and executed-round counts, declared function names,
+  safe HTTP metadata and canonical error wording. No raw failed generation,
+  prompt, authorization header or key is retained.
+
+The 512-token selection budget was reviewed against Groq's reasoning guidance.
+The supplied failure was a tool-validation HTTP error, not a `length` finish.
+The budget remains bounded at 512/1,024 for selection/report; truncation remains
+a failure, without saving a conclusion. The final strict schema and current
+object/evidence permission checks are unchanged. One corrected mock completes
+with real locally retrieved citation IDs; repeated rejection stops truthfully.
+
+Existing permissions, deterministic access/download detection, approved export,
+linked shipment findings, task execution, finding outcomes and audit export
+were reused. Actual additional repairs:
+
+- Stage-local location now displays its actual record (for example Hub B),
+  expectation and comparison status. An intermediate hub is never compared with
+  the delivery destination. Delivery GPS retains its separate existing rule.
+- Nullable custodian/sender/receiver JSON fields require no schema migration.
+  Historical missing identities remain Unknown. Recorded claims do not verify
+  an identity or route. Event and upload times are shown separately in MYT.
+- Invalid/nonfinite measurements, fractional package counts and ambiguous event
+  timestamps are rejected before persistence. Future source handoffs remain
+  detectable anomalies; task responses retain the existing no-future-time rule.
+- Clarification tasks remain usable while approval is pending. Revised responses
+  can add context to the same observation time: each submission has its own
+  source identity, while the existing submission key still deduplicates retries.
+  Equal observation times use received time and record order to select the latest
+  recorded correction, retaining both submissions in the audit.
+- Rejection audit operation is correctly named `action_rejected`. Active demo
+  identities and reasons are recorded; no fictional supervisor name is displayed.
+- Post-delivery account access is labelled explicitly, without implying it
+  caused an earlier weight difference. Partner context uses a permitted shipment
+  denominator, all-history period, distinct affected/category counts, field
+  completeness, human outcomes and small-sample caveats.
+- SQLite's template connection closes before Windows rename. A SQLite connection
+  context alone commits/rolls back but does not close; no data reset is involved.
+
+### Reproducible checks
+
+Commands use `.venv\Scripts\python.exe -X utf8`. Counts below overlap and must
+not be added into a claimed independent sample size.
+
+| Check | Actual result | Method |
+|---|---|---|
+| Existing AI, native protocol, state, security and Groq guard suite | 80 passed | pytest, mocked HTTP and isolated databases |
+| Second-request rejection, bounded correction, canonical arguments and truncation | 9 passed | `tests/test_fix_plan_ai.py` |
+| Actions, permissions, new workflow/demo regressions | 65 passed | agent's focused actions/security suite |
+| Completion, evidence, workflow and seed timing | 36 passed | focused pytest after Windows connection fix |
+| Clarification drafts, existing UI approvals, AI state/navigation | 9 passed | real Streamlit widgets, mocked AI |
+| Desktop/mobile evidence, next-action and partner views | 18 passed | local browser, 1366×768 and 390×844, no AI |
+| Final input/AI fixture/build check | 27 passed | handoff fields, corrected native calls and build/runtime tests |
+| Same-time correction / completion check | 24 passed | latest received evidence selected with retained audit |
+| Live Groq success | Blocked | no local `GROQ_API_KEY` or secrets file; no provider calls made |
+| Hosted behavior for this release | Not tested | public deployment explicitly not authorized |
+
+### Scenario evaluation
+
+| Scenario | Expected | Actual / evidence | Status |
+|---|---|---|---|
+| Weight and exact photo pair | Independent flags and real references, no guilt claim | PV-DEMO-001 and linked PV-SHIP-010; existing rules and completion tests | Pass, synthetic |
+| Packaging/measurement explanation | Use approved, linked measurements | PV-SHIP-011 suppresses unsupported weight flag | Pass, synthetic |
+| Approved export | Allowed only in recorded scope/period | Existing access-pattern evaluation returns authorized_export | Pass, synthetic |
+| Unassigned/linked-object access | No protected data; denial logged | Security tests and minimized-output assertion | Pass, synthetic |
+| Missing evidence | Unknown, not a fabricated match | PV-SHIP-021 retains missing fields | Pass, synthetic |
+| Bad tool/arguments or injected instructions | No execution or authority grant | Registry and existing agent-security tests | Pass, mocked |
+| Invented/out-of-scope citation | No saved report | Existing final report/security tests | Pass, mocked |
+| Repeated provider failure / round limit | Bounded stop, manual workflow intact | New second-request fixture plus existing bound tests | Pass, mocked |
+| Approval/rejection/duplicate execution | Server authority and one approved task | Completion/action tests; actor, reason and audit assertions | Pass, synthetic |
+| Request more, revised response, closure | Preserve other findings; explicit disposition | New workflow and widget regressions | Pass, synthetic |
+| Real AI investigation after this repair | Completed report with permitted tools/citations | No private key in local environment | Blocked |
+
+`qa/evaluate_demo.py` measured 60 synthetic shipments, three featured cases,
+56 background controls, no missed required categories, no false-alert shipments
+and 59/60 records with required field presence. These are fixture/rules results,
+not production accuracy or verification of parcel contents. Results are in
+`qa/artifacts/demo-evaluation.json`; browser captures are in
+`qa/artifacts/review-workspace/`.
+
+For manual versus AI-assisted review, recruit reviewers, counterbalance case
+order, use equal evidence and record actual start/finish time, missed discrepancies,
+unsupported alerts, citation quality and completed decisions. Do not use test
+runtime as human review time. No human study has been run: all comparative review
+time and productivity results are **not measured**.
+
+### Proposal alignment
+
+`reference/ParcelVerify_Full_Idea.pdf` exists and has not been edited. Proposed
+replacement for its Gemini-provider technical wording:
+
+> The prototype uses Groq Chat Completions at the official
+> Groq endpoint, with configurable GROQ_MODEL (default openai/gpt-oss-20b).
+> Only local, read-only, permission-checked evidence functions are available to
+> the investigation. Final reports require structured validation and authorized
+> evidence references; all business decisions require human approval. No other
+> provider or paid fallback is activated.
+
+Alternative Groq models are configurable but not live-verified here. Demo role
+selection is not production authentication. Evidence tasks are local records;
+they send no external messages. Workspaces expire after 24 hours inactivity or
+host storage loss; recovery tokens only work while that storage survives. All
+records/images are synthetic. The latest implementation is not publicly deployed.
+
+For startup and both gates, follow `docs/DEMO_SCRIPT.md`. For one real smoke test,
+privately configure the existing Free Plan key, run the mocked tests first, then
+run `qa/real_ai_acceptance.py --confirm-free-plan` once. No key should be pasted
+in a report, chat, screenshot or tracked file.
+
+## Historical verification — 16 October 2026
 
 ## Scope and preserved behavior
 
