@@ -316,8 +316,8 @@ def agent_proposal_card(path,case,report,actor):
         st.caption('No action proposed. The AI found no follow-up request it could ground in the evidence.')
         return
     st.write(ACTION_LABELS.get(proposal['action_type'],proposal['action_type'])+' · for '+source_label(proposal['source_event_id']))
-    st.write('Why: '+proposal['reason'])
-    if proposal.get('draft_message'):st.caption('Draft message: '+proposal['draft_message'])
+    st.write('AI reasoning (not sent): '+proposal['reason'])
+    if proposal.get('draft_message'):st.caption('Message to the partner (fixed wording): '+proposal['draft_message'])
     stored=agent_proposal_status(path,case['case_id'],proposal)
     if stored:
         st.info(PROPOSAL_STATUS.get(stored['status'],stored['status'])+'. The AI cannot approve or send it.')

@@ -122,10 +122,12 @@ def test_prefetched_findings_support_a_proposal_without_model_selecting_context(
     case = _create_case_for_investigation(seeded_db)
     findings = _case_findings(seeded_db, case['case_id'])
     assert findings
-    result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=ScriptedProvider([{'done': True}, _proposal_report(seeded_db, case['case_id'], findings[:1] * 2)]))
+    with get_connection(seeded_db) as conn:
+        weight = [r[0] for r in conn.execute("SELECT finding_id FROM case_findings WHERE case_id=? AND category='weight_diff'", (case['case_id'],))]
+    result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=ScriptedProvider([{'done': True}, _proposal_report(seeded_db, case['case_id'], weight * 2)]))
     assert result['status'] == 'completed', result.get('error')
     assert [c['source'] for c in result['tool_calls']] == ['server_prefetch']
-    assert result['report']['proposed_action']['finding_ids'] == findings[:1]  # de-duplicated
+    assert result['report']['proposed_action']['finding_ids'] == weight  # de-duplicated
     assert result['proposal']['status'] == 'proposed'
     assert len(_agent_rows(seeded_db, case['case_id'])) == 1
 
@@ -175,3 +177,88 @@ def test_real_finding_from_another_unlinked_case_is_rejected(seeded_db):
     result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=ScriptedProvider([{'done': True}, _proposal_report(seeded_db, case['case_id'], foreign[:1])]))
     assert result['status'] == 'completed' and result['report']['proposed_action'] is None
     assert _agent_rows(seeded_db, case['case_id']) == []
+
+
+# --- live run 2026-11-03: wrong photo record and mixed request text -----------------
+from agent.runner import _tool_message
+
+
+def _demo_event(db, event_type):
+    with get_connection(db) as conn:
+        event = conn.execute("SELECT event_id FROM events WHERE shipment_id='PV-DEMO-001' AND event_type=?", (event_type,)).fetchone()[0]
+        photos = [r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (event,))]
+    return event, photos
+
+
+def _demo_findings(db):
+    case = _create_case_for_investigation(db)
+    _case_findings(db, case['case_id'])
+    with get_connection(db) as conn:
+        rows = conn.execute('SELECT finding_id,category FROM case_findings WHERE case_id=?', (case['case_id'],)).fetchall()
+    return case, {fid: {'finding_id': fid, 'category': cat} for fid, cat in rows}
+
+
+def _check(db, proposal, presented):
+    with get_connection(db) as conn:
+        return _check_proposal(conn, {'proposed_action': proposal}, 'PV-DEMO-001', set(proposal['evidence_ids']) | {proposal['source_event_id']}, presented)
+
+
+def _ids(presented, category):
+    return [f for f, v in presented.items() if v['category'] == category]
+
+
+def test_rephoto_aimed_at_handover_while_citing_the_delivery_photo_is_dropped(seeded_db):
+    """The exact live mistake: target = handover record, cited photo = proof-of-delivery photo."""
+    _, presented = _demo_findings(seeded_db)
+    handover, _ = _demo_event(seeded_db, 'handoff_submitted')
+    _, pod_photos = _demo_event(seeded_db, 'pod_submitted')
+    proposal = {'action_type': 'request_rephoto', 'source_event_id': handover, 'finding_ids': list(presented),
+                'reason': 'photo reused', 'evidence_ids': [handover] + pod_photos, 'draft_message': 'Please re-photo and re-weigh.'}
+    checked, note = _check(seeded_db, proposal, presented)
+    assert checked['proposed_action'] is None and 'photo' in note
+
+
+def test_rephoto_on_the_photo_record_keeps_only_photo_findings_and_uses_fixed_wording(seeded_db):
+    _, presented = _demo_findings(seeded_db)
+    pod, pod_photos = _demo_event(seeded_db, 'pod_submitted')
+    proposal = {'action_type': 'request_rephoto', 'source_event_id': pod, 'finding_ids': list(presented),
+                'reason': 'photo reused', 'evidence_ids': [pod] + pod_photos, 'draft_message': 'Please re-photo and also re-weigh the parcel.'}
+    checked, note = _check(seeded_db, proposal, presented)
+    kept = checked['proposed_action']
+    assert note is None and kept['finding_ids'] == _ids(presented, 'photo_reuse')
+    assert 'proof of delivery' in kept['draft_message'] and 'weigh' not in kept['draft_message']
+
+
+@pytest.mark.parametrize('action,event_type,category', [('request_reweigh', 'pod_submitted', 'weight_diff'),
+                                                       ('request_reweigh', 'handoff_submitted', 'photo_reuse')])
+def test_request_must_match_target_and_finding_kind(seeded_db, action, event_type, category):
+    _, presented = _demo_findings(seeded_db)
+    event, _ = _demo_event(seeded_db, event_type)
+    proposal = {'action_type': action, 'source_event_id': event, 'finding_ids': _ids(presented, category),
+                'reason': 'r', 'evidence_ids': [event], 'draft_message': ''}
+    checked, note = _check(seeded_db, proposal, presented)
+    assert checked['proposed_action'] is None and note
+
+
+def test_stored_request_reason_never_contains_model_text(seeded_db):
+    case, presented = _demo_findings(seeded_db)
+    handover, _ = _demo_event(seeded_db, 'handoff_submitted')
+    report = {'proposed_action': {'action_type': 'request_reweigh', 'source_event_id': handover, 'finding_ids': _ids(presented, 'weight_diff'),
+                                  'reason': 'MODEL-TEXT please also rephoto', 'evidence_ids': [handover], 'draft_message': 'MODEL-DRAFT'}}
+    out = submit_agent_proposal(seeded_db, case['case_id'], report, ADMIN, snapshot='v1')
+    with get_connection(seeded_db) as conn:
+        reason = conn.execute('SELECT reason FROM action_requests WHERE action_id=?', (out['action_id'],)).fetchone()[0]
+    assert 'MODEL' not in reason and 'handover to partner' in reason and 'weigh the parcel again' in reason
+
+
+def test_photo_reuse_result_names_the_record_of_each_photo(seeded_db):
+    from agent.tools import dispatch_tool
+    case, _ = _demo_findings(seeded_db)
+    pod, pod_photos = _demo_event(seeded_db, 'pod_submitted')
+    out = dispatch_tool(seeded_db, 'find_photo_reuse', {'photo_id': pod_photos[0]}, {'case_id': case['case_id']}, ADMIN)
+    with get_connection(seeded_db) as conn:
+        ids = [m['event_id'] for m in out['result']['exact_matches'] + out['result']['similar_candidates'] if m['event_id'] != '[masked]']
+        types = dict(conn.execute('SELECT event_id,event_type FROM events WHERE event_id IN (%s)' % ','.join('?' * len(ids)), ids).fetchall()) if ids else {}
+    types[('photo', pod_photos[0])] = (pod, 'pod_submitted')
+    encoded, _ = _tool_message(out, types)
+    assert '"photo_record":"proof of delivery"' in encoded

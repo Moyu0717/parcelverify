@@ -207,9 +207,19 @@ _TOOL_DEFS_CHARS = len(json.dumps(tool_definitions()))
 _REPORT_SCHEMA_CHARS = len(json.dumps(InvestigationReport.model_json_schema()))
 
 
-def _tool_message(output):
+# Plain record names so the model cannot confuse a delivery photo with a handover photo (live run 2026-11-03).
+RECORD_LABELS = {'handoff_submitted':'handover to partner','pod_submitted':'proof of delivery','dispatch_confirmed':'dispatch',
+                 'weight_measured':'new weight check','recipient_authorization':'recipient authorization'}
+
+
+def _record_label(event_type):
+    return RECORD_LABELS.get(event_type, (event_type or 'unknown record').replace('_',' '))
+
+
+def _tool_message(output, event_types=None):
     """Keep original tool/audit records; send a declared compact case overview."""
     data=output['result']
+    event_types=event_types or {}
     if output['tool']=='get_case_context':
         shipments={}
         members=[]
@@ -225,13 +235,19 @@ def _tool_message(output):
     elif output['tool']=='get_shipment_timeline' and isinstance(data.get('events'),list):
         data={'shipment_id':data.get('shipment_id'),
               'events':[{'event_id':e.get('event_id'),'event_type':e.get('event_type'),'occurred_at':e.get('occurred_at'),'payload':e.get('payload'),
-                         **({'photo_ids':[p.get('photo_id') for p in e.get('photos') or []]} if e.get('photos') else {})} for e in data['events']],
+                         **({'photo_ids':[p.get('photo_id') for p in e.get('photos') or []],'photo_record':_record_label(e.get('event_type'))} if e.get('photos') else {})} for e in data['events']],
               'limits':'Compact timeline: receipt times, capture metadata and photo notes omitted. You cannot see images.'}
     elif output['tool']=='find_photo_reuse' and 'similar_candidates' in data:
         similar=sorted(data.get('similar_candidates') or [],key=lambda c:c.get('hamming_distance',99))
-        data={'photo_id':data.get('photo_id'),'exact_matches':(data.get('exact_matches') or [])[:5],'exact_match_count':len(data.get('exact_matches') or []),
-              'closest_similar':similar[:3],'similar_count':len(similar),
-              'limits':'Hashes omitted. Exact match = identical file; a small hamming distance is visual similarity only, not proof of reuse.'}
+        def labelled(match):
+            event=event_types.get(match.get('event_id'))
+            return dict(match,record=_record_label(event)) if event else match
+        queried=event_types.get(('photo',data.get('photo_id')))
+        data={'photo_id':data.get('photo_id'),**({'photo_event_id':queried[0],'photo_record':_record_label(queried[1])} if queried else {}),
+              'exact_matches':[labelled(m) for m in (data.get('exact_matches') or [])[:5]],'exact_match_count':len(data.get('exact_matches') or []),
+              'closest_similar':[labelled(m) for m in similar[:3]],'similar_count':len(similar),
+              'limits':'Hashes omitted. Exact match = identical file; a small hamming distance is visual similarity only, not proof of reuse. '
+                       'Name each photo only by its record value.'}
     elif output['tool']=='check_access_scope' and isinstance(data.get('access_logs'),list):
         groups={}
         for log in data['access_logs']:
@@ -315,7 +331,8 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
                   "Only find_photo_reuse accepts photo_id from timeline; get_vendor_context optionally accepts at_time. Other params empty. "
                   "In the final report, proposed_action is either null (when a legitimate explanation is recorded or the evidence does not support a specific request) "
                   "or one request of type request_reweigh, request_rephoto or request_rescan, aimed at a source_event_id you retrieved, listing the finding_ids it addresses (from the case context), citing retrieved evidence_ids, "
-                  "with a short neutral draft_message to the partner. A human approves it; you cannot.")
+                  "with a short neutral draft_message to the partner. request_rephoto targets the event that holds the photo concerned; request_reweigh targets an event with a recorded weight. "
+                  "Describe a photo only by the record label the tools give it (for example proof of delivery or handover). A human approves it; you cannot.")
         messages = [{"role":"system","content":prompt}, {"role":"user","content":json.dumps({"case_id":case_id,"shipment_id":shipment_id,"partner_id":partner_id})}]
         available = set()
         presented_findings = {}  # finding_id -> finding actually shown to the model
@@ -417,7 +434,14 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             conn.execute("INSERT INTO tool_executions(tool_exec_id,case_id,run_id,tool_name,parameters_json,result_summary,evidence_ids_json,source,duration_ms,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (exec_id,case_id,run_id,record["tool"],json.dumps(record["params"]),record["result_summary"],json.dumps(record["evidence_ids"]),source,record["duration_ms"],_now()))
             conn.commit()
             if output['result'].get('error'):raise ValueError('Invalid or unauthorized investigation tool request: '+_safe_error(output['result']['error']))
-            encoded,refs=_tool_message(output)
+            event_types={}
+            if call['tool']=='find_photo_reuse' and not output['result'].get('error'):
+                found=output['result']
+                ids=[m.get('event_id') for m in (found.get('exact_matches') or [])+(found.get('similar_candidates') or []) if m.get('event_id') not in (None,'[masked]')]
+                if ids:event_types.update(conn.execute('SELECT event_id,event_type FROM events WHERE event_id IN (%s)'%','.join('?'*len(ids)),ids).fetchall())
+                own=conn.execute('SELECT e.event_id,e.event_type FROM photos p JOIN events e ON e.event_id=p.event_id WHERE p.photo_id=?',(found.get('photo_id'),)).fetchone()
+                if own:event_types[('photo',found.get('photo_id'))]=tuple(own)
+            encoded,refs=_tool_message(output,event_types)
             if len(json.dumps(messages))+len(encoded)>TOOL_CONTEXT_BUDGET:
                 diagnostics.setdefault('withheld_tools',[]).append(call['tool'])
                 if source=='server_prefetch':raise ValueError('Case context exceeds the AI context budget')
@@ -563,8 +587,43 @@ def validate_saved_report(db_path,report_record,actor_context):
 AGENT_IDENTITY = 'AGENT-INVESTIGATOR'
 
 
+# Which findings each request can address, and what the target event must hold.
+ACTION_FINDINGS = {'request_reweigh': {'weight_diff'}, 'request_rephoto': {'photo_reuse'}, 'request_rescan': {'count_discrepancy', 'seal_mismatch'}}
+ACTION_TEXT = {'request_reweigh': 'weigh the parcel again and submit the new weight',
+               'request_rephoto': 'take a new photo of the parcel and submit it',
+               'request_rescan': 'count and scan the packages again and submit the result'}
+
+
+def _target_problem(conn, proposal):
+    """The target must fit the action: a photo cited for a re-photo, a recorded weight for a re-weigh."""
+    action, event_id = proposal['action_type'], proposal['source_event_id']
+    if action == 'request_rephoto':
+        photos = {r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (event_id,))}
+        if not photos & set(proposal['evidence_ids']):
+            return 'a photo request must target the record whose photo it cites'
+        return None
+    row = conn.execute('SELECT payload_json FROM events WHERE event_id=?', (event_id,)).fetchone()
+    payload = json.loads(row[0] or '{}') if row else {}
+    if action == 'request_reweigh' and payload.get('weight_g') is None:return 'a weight request must target a record with a weight'
+    if action == 'request_rescan' and payload.get('count') is None and payload.get('seal_id') is None:return 'a scan request must target a record with a count or seal'
+    return None
+
+
+def proposal_request_text(conn, proposal, shipment_id):
+    """Fixed server wording for the stored request and partner message; model text stays in the report only."""
+    row = conn.execute('SELECT event_type FROM events WHERE event_id=?', (proposal['source_event_id'],)).fetchone()
+    record = _record_label(row[0] if row else None)
+    message = ('For shipment ' + str(shipment_id) + ', please ' + ACTION_TEXT[proposal['action_type']] + ' for the ' + record +
+               ' record (' + proposal['source_event_id'][:8] + '). This is a routine check; it does not assign responsibility.')
+    return record, message
+
+
 def _check_proposal(conn, report, shipment_id, available, presented_findings=None):
-    """Drop (never repair) a draft action that is not grounded in this case's retrieved evidence."""
+    """Drop (never repair) a draft action that is not grounded in this case's retrieved evidence.
+
+    Narrowing is allowed: finding IDs that do not match the action are removed, and the partner
+    message is replaced by fixed server wording.
+    """
     proposal = report.get('proposed_action')
     if not proposal:return report, None
     problem = None
@@ -577,7 +636,12 @@ def _check_proposal(conn, report, shipment_id, available, presented_findings=Non
         row = conn.execute('SELECT shipment_id FROM events WHERE event_id=?', (proposal['source_event_id'],)).fetchone()
         if not row or row[0] != shipment_id:problem = 'target is not an event on this shipment'
     if not problem:
-        proposal = dict(proposal, finding_ids=list(dict.fromkeys(proposal['finding_ids'])))
+        matching = [f for f in dict.fromkeys(proposal['finding_ids'])
+                    if (presented_findings or {}).get(f, {}).get('category') in ACTION_FINDINGS[proposal['action_type']]]
+        if not matching:problem = 'none of the named findings is the kind this request addresses'
+        else:problem = _target_problem(conn, proposal)
+    if not problem:
+        proposal = dict(proposal, finding_ids=matching, draft_message=proposal_request_text(conn, proposal, shipment_id)[1])
         report = dict(report, proposed_action=proposal)
     if problem:
         return dict(report, proposed_action=None), problem
@@ -629,8 +693,12 @@ def submit_agent_proposal(db_path, case_id, report, actor_context, snapshot=None
             if json.loads(details).get('source_event_id') == proposal['source_event_id']:
                 return {'status': 'existing', 'action_id': action_id, 'message': 'An open request for this step already exists.'}
     agent = {'actor_id': AGENT_IDENTITY, 'role': 'investigator', 'session_id': actor.session_id, 'is_simulated': True}
-    reason = ('AI review agent: ' + proposal['reason'].strip())[:400] + ' | Findings: ' + ', '.join(proposal['finding_ids'])
-    if proposal.get('draft_message'):reason = (reason + ' | Draft message: ' + proposal['draft_message'].strip())[:900]
+    with get_connection(db_path) as conn:
+        shipment = conn.execute('SELECT shipment_id FROM events WHERE event_id=?', (proposal['source_event_id'],)).fetchone()
+        record, message = proposal_request_text(conn, proposal, shipment[0] if shipment else '')
+    # Fixed wording only: free model text never enters the stored request (live run 2026-11-03 mixed in a re-weigh).
+    reason = ('AI review agent proposes: ' + ACTION_TEXT[proposal['action_type']] + ' (' + record + ' record). Findings: '
+              + ', '.join(proposal['finding_ids']) + ' | Partner message: ' + message)[:900]
     try:
         out = propose_action(db_path, case_id, proposal['action_type'], agent, reason=reason,
                              source_event_id=proposal['source_event_id'], request_id=request_id)
