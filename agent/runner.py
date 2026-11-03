@@ -12,7 +12,7 @@ import httpx
 from contracts import ActorContext, InvestigationReport, MAX_TOOL_ROUNDS, RULE_VERSION, TOTAL_TIME_BUDGET_S, TOOL_WHITELIST, AGENT_PROPOSABLE_ACTIONS
 from db import get_connection
 from agent.tools import dispatch_tool, authorize_case, evidence_is_authorized
-from agent.tool_registry import validate_tool_arguments
+from agent.tool_registry import validate_tool_arguments, tool_definitions
 from agent.configuration import provider_settings, GROQ_ENDPOINT, bounded_setting
 from agent.usage import reserve_request, evidence_snapshot, UsageLimit
 from agent.diagnostics import provider_metadata
@@ -203,6 +203,10 @@ def _prune(value):
 TOOL_CONTEXT_BUDGET = 14000
 
 
+_TOOL_DEFS_CHARS = len(json.dumps(tool_definitions()))
+_REPORT_SCHEMA_CHARS = len(json.dumps(InvestigationReport.model_json_schema()))
+
+
 def _tool_message(output):
     """Keep original tool/audit records; send a declared compact case overview."""
     data=output['result']
@@ -329,7 +333,12 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             diagnostics.update(phase='final_report' if final else 'tool_selection',input_characters=len(encoded),output_token_limit=1024 if final else 512)
             if len(encoded)>20000:raise ValueError('Evidence exceeds the bounded AI context. Review the source records manually.')
             if real_provider:
-                estimate=(len(encoded)+3)//4+(1024 if final else 512)
+                # Budget messages plus protocol overhead at a conservative ~3 chars/token.
+                # encoded above already contains native tool definitions for the
+                # context bound. Start from messages here to avoid counting them twice.
+                # This estimate cannot guarantee a provider quota or exact token count.
+                extra=_REPORT_SCHEMA_CHARS if final else (_TOOL_DEFS_CHARS if getattr(provider,'protocol','json')!='json' else 0)
+                estimate=(len(json.dumps(messages))+extra+2)//3+(1024 if final else 512)
                 while True:
                     try:
                         reserve_request(estimate);break
@@ -344,6 +353,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
                 remaining=TOTAL_TIME_BUDGET_S-(time.monotonic()-start)
             result['request_count']+=1
             attempt={'request':result['request_count'],'phase':'final_report' if final else 'tool_selection','tool_round':len(result['tool_calls'])+1 if not final else None}
+            if real_provider:attempt['reserved_tokens']=estimate
             diagnostics['request_history'].append(attempt)
             replies = queue.Queue(maxsize=1)
             state={'finished':False,'release_slot':False}

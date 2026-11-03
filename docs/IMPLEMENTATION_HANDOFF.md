@@ -1,5 +1,32 @@
 # ParcelVerify implementation handoff — 14 October 2026
 
+## Current delivery note — 3 November 2026, token reservation patch
+
+The historical notes below describe earlier releases. Current inference uses
+Groq, default `openai/gpt-oss-20b`, in the existing single-investigator path with
+S02. Step 1 `draft_only`, reviewed mode and an Explanation Checker are not
+implemented or enabled. UI porting remains gated on the framework's real AI
+scenario acceptance; no UI or workflow change belongs to this patch.
+
+Observed baseline: deployed `8a8ef4b` reached 11,280 characters in the final
+request but received provider HTTP 429 (`rate_limit_exceeded`, type `tokens`).
+All three selection requests returned 200. The local reservation underestimated
+the combined request budget; a character-based estimate is approximate and is
+not proof of the exact provider tokenizer or the account's remaining quota.
+
+The new reservation uses message JSON plus native tool definitions or final
+report schema, at a conservative three characters per token, plus the existing
+512/1,024 output reserve. Review caught that the existing `encoded` string
+already included tool definitions: estimation now starts from message JSON so
+those definitions are counted exactly once. Per-request reserved tokens are
+recorded in sanitized diagnostics. Quota ceilings, rolling-window waits, the
+shared deadline, permission checks and the no-retry rule for provider 429 remain.
+
+Targeted reservation/context tests passed (7); full regression passed (305 tests
+in 269.10 seconds). The deployed commit and the single live result are recorded separately in
+`qa/artifacts/token-estimate-fix/`; successful mocked tests are not live success.
+
+
 ## Requirement-to-code inspection
 
 The existing application already had the green/white horizontal UI, current-time assignment checks, protected photo matching, persisted actions, transactional audit, bounded model transport, reference validation and isolated workspaces. The incomplete parts were event-scoped cases presented separately, no task-linked evidence response/review, administrative closure without a separate outcome, seed evaluation before recorded delivery, and colored demonstration assets. This iteration completes those integrations rather than replacing the stack.

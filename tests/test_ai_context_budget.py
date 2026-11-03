@@ -77,3 +77,23 @@ def test_final_request_uses_short_field_guide_not_full_schema(seeded_db):
             return super().generate(messages, timeout, final)
     investigate_case(seeded_db, case['case_id'], ADMIN_ACTOR, provider=P([{'done': True}, valid_report()]))
     assert '"$defs"' not in seen['last'] and 'proposed_action' in seen['last'] and 'finding_ids' in seen['last']
+
+
+def test_local_token_estimate_counts_declared_tools_and_schema(seeded_db, monkeypatch):
+    """Live 2026-11-03: the final report got Groq 429 (tokens) because chars/4 under-counted."""
+    case = _create_case_for_investigation(seeded_db)
+    reserved = []
+    monkeypatch.setattr(runner, 'reserve_request', lambda tokens: reserved.append(tokens))
+    class Native(Recorder):
+        protocol = 'native'
+        def generate(self, messages, timeout, final=False):
+            self.last = len(json.dumps(messages))
+            return super().generate(messages, timeout, final)
+    provider = Native([{'done': True}, valid_report()])
+    monkeypatch.setattr(runner, 'ModelProvider', lambda: provider)
+    result = investigate_case(seeded_db, case['case_id'], ADMIN_ACTOR)  # real-provider path uses the guard
+    assert result['status'] == 'completed', result.get('error')
+    selection, final = reserved
+    assert selection == (provider.sizes[0] + runner._TOOL_DEFS_CHARS + 2) // 3 + 512
+    assert final == (provider.sizes[1] + runner._REPORT_SCHEMA_CHARS + 2) // 3 + 1024
+    assert [attempt['reserved_tokens'] for attempt in result['diagnostics']['request_history']]==reserved
