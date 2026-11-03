@@ -153,6 +153,19 @@ class ModelProvider:
         except (KeyError,IndexError,TypeError):raise ValueError('Malformed Groq response; no conclusion was saved.')
 
 
+class ClaimRejected(ValueError):
+    """A forbidden visual or blame phrase; .term is the matched words only (safe to log)."""
+    def __init__(self, term):
+        super().__init__("Unsupported visual or responsibility claim")
+        self.term = term
+
+
+# Photo + confirming verb within two words ("delivery photo confirms ..."), unless it is about the reuse check or IDs.
+VISUAL_CLAIM = (r"\b(?:photo|photos|image|images|picture|pictures|photograph|photographs)\s+"
+                r"(?!(?:reuse|hash|hashes|id|ids|match|matches|matching|record|records|metadata|check)\b)(?:\S+\s+){0,2}?"
+                r"(?:confirms?|confirmed|shows?|showed|proves?|proved|verif(?:y|ies|ied)|demonstrates?|depicts?|reveals?)\b")
+
+
 def _validate_report(data, case_id, available):
     if data.get("case_id", case_id) != case_id:
         raise ValueError("Report refers to a different case")
@@ -169,8 +182,9 @@ def _validate_report(data, case_id, available):
     # Strip only explicit negative disclaimers, never an entire sentence.
     claims = re.sub(r"\b(?:not (?:proof|evidence) of|no (?:proof|evidence) of|does not (?:prove|confirm)) (?:fraud|theft|tampering|responsibility)\b", "", claims)
     claims = re.sub(r"\b(?:cannot|can not|does not) (?:establish|determine|confirm) (?:fraud|theft|responsibility)\b", "", claims)
-    if re.search(forbidden, claims):
-        raise ValueError("Unsupported visual or responsibility claim")
+    match = re.search(forbidden, claims) or re.search(VISUAL_CLAIM, claims)
+    if match:
+        raise ClaimRejected(match.group(0)[:60])
     return report.model_dump(mode="json")
 
 
@@ -501,8 +515,20 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         messages.append({"role":"user","content":"Tool phase finished. Generate ONLY the final report JSON: "+REPORT_FIELDS+" Each fact needs retrieved evidence IDs. Valid IDs: "+json.dumps(sorted(available))})
         raw_report=generate(final=True)
         stage='output_validation'
-        report = _validate_report(raw_report,case_id,available)
-        report, proposal_note = _check_proposal(conn, report, shipment_id, available, presented_findings)
+        try:
+            report = _validate_report(raw_report,case_id,available)
+        except ClaimRejected as exc:
+            # One bounded rewrite (counts toward the request budget); a second violation fails closed.
+            diagnostics['claim_rewrite']={'term':exc.term}
+            messages.append({"role":"user","content":"Your report was rejected by the server check because it contained the wording "+json.dumps(exc.term)+
+                             ". You cannot see images and must not assign blame or describe what a photo shows. Write the complete final report JSON again "
+                             "with the same evidence IDs, describing photos only by their record and match result."})
+            stage='final_request'
+            raw_report=generate(final=True)
+            stage='output_validation'
+            report = _validate_report(raw_report,case_id,available)
+            diagnostics['claim_rewrite']['outcome']='passed'
+        report, proposal_note = _check_proposal(conn, report, shipment_id, available, presented_findings, diagnostics)
         if proposal_note:diagnostics['proposal_dropped']=proposal_note
         stage='evidence_validation'
         authorize_case(conn,case_id,actor)
@@ -594,19 +620,34 @@ ACTION_TEXT = {'request_reweigh': 'weigh the parcel again and submit the new wei
                'request_rescan': 'count and scan the packages again and submit the result'}
 
 
-def _target_problem(conn, proposal):
-    """The target must fit the action: a photo cited for a re-photo, a recorded weight for a re-weigh."""
-    action, event_id = proposal['action_type'], proposal['source_event_id']
+def _resolve_target(conn, proposal, shipment_id, findings):
+    """Pick the target event on the server from what the proposal and its findings cite.
+
+    Small models named the wrong record twice in live runs (2026-11-03). The target is the one
+    shipment record that fits the action and is cited; if none or several fit, the proposal is dropped.
+    """
+    action = proposal['action_type']
+    finding_refs = {ref for finding in findings for ref in finding.get('evidence_ids') or []}
+    cited = set(proposal['evidence_ids']) | finding_refs
+    # A photo record must be referenced by a cited photo or event. Measurement
+    # records must be linked by the selected finding, not just named by the model.
+    refs = cited if action == 'request_rephoto' else finding_refs
+    candidates = []
+    for event_id, event_type, payload in conn.execute('SELECT event_id,event_type,payload_json FROM events WHERE shipment_id=? ORDER BY occurred_at', (shipment_id,)):
+        payload = json.loads(payload or '{}')
+        if action == 'request_rephoto':
+            photos = {r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (event_id,))}
+            fits = bool(photos & refs) or (bool(photos) and event_id in refs)
+        elif action == 'request_reweigh':
+            fits = event_type != 'dispatch_confirmed' and payload.get('weight_g') is not None and event_id in refs
+        else:
+            fits = event_type != 'dispatch_confirmed' and (payload.get('count') is not None or payload.get('seal_id') is not None) and event_id in refs
+        if fits:candidates.append(event_id)
     if action == 'request_rephoto':
-        photos = {r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (event_id,))}
-        if not photos & set(proposal['evidence_ids']):
-            return 'a photo request must target the record whose photo it cites'
-        return None
-    row = conn.execute('SELECT payload_json FROM events WHERE event_id=?', (event_id,)).fetchone()
-    payload = json.loads(row[0] or '{}') if row else {}
-    if action == 'request_reweigh' and payload.get('weight_g') is None:return 'a weight request must target a record with a weight'
-    if action == 'request_rescan' and payload.get('count') is None and payload.get('seal_id') is None:return 'a scan request must target a record with a count or seal'
-    return None
+        # Records whose photo is cited win over records cited only by ID.
+        by_photo = [e for e in candidates if {r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (e,))} & refs]
+        candidates = by_photo or candidates
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def proposal_request_text(conn, proposal, shipment_id):
@@ -618,7 +659,7 @@ def proposal_request_text(conn, proposal, shipment_id):
     return record, message
 
 
-def _check_proposal(conn, report, shipment_id, available, presented_findings=None):
+def _check_proposal(conn, report, shipment_id, available, presented_findings=None, notes=None):
     """Drop (never repair) a draft action that is not grounded in this case's retrieved evidence.
 
     Narrowing is allowed: finding IDs that do not match the action are removed, and the partner
@@ -639,7 +680,17 @@ def _check_proposal(conn, report, shipment_id, available, presented_findings=Non
         matching = [f for f in dict.fromkeys(proposal['finding_ids'])
                     if (presented_findings or {}).get(f, {}).get('category') in ACTION_FINDINGS[proposal['action_type']]]
         if not matching:problem = 'none of the named findings is the kind this request addresses'
-        else:problem = _target_problem(conn, proposal)
+        else:
+            target = _resolve_target(conn, proposal, shipment_id, [presented_findings[f] for f in matching])
+            if not target:problem = 'no single cited record fits this request'
+            else:
+                if target != proposal['source_event_id']:
+                    if notes is not None:notes['proposal_target_set_by_server'] = {'ai_named': proposal['source_event_id'], 'server_target': target}
+                proposal = dict(proposal, source_event_id=target)
+                photos = [r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (target,))]
+                if proposal['action_type'] == 'request_rephoto' and not set(photos) & set(proposal['evidence_ids']):
+                    proposal = dict(proposal, evidence_ids=list(dict.fromkeys(proposal['evidence_ids'] + [target])))
+                problem = None
     if not problem:
         proposal = dict(proposal, finding_ids=matching, draft_message=proposal_request_text(conn, proposal, shipment_id)[1])
         report = dict(report, proposed_action=proposal)

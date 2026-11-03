@@ -194,8 +194,9 @@ def _demo_findings(db):
     case = _create_case_for_investigation(db)
     _case_findings(db, case['case_id'])
     with get_connection(db) as conn:
-        rows = conn.execute('SELECT finding_id,category FROM case_findings WHERE case_id=?', (case['case_id'],)).fetchall()
-    return case, {fid: {'finding_id': fid, 'category': cat} for fid, cat in rows}
+        rows = conn.execute('SELECT finding_id,category,evidence_ids_json FROM case_findings WHERE case_id=?', (case['case_id'],)).fetchall()
+    import json
+    return case, {fid: {'finding_id': fid, 'category': cat, 'evidence_ids': json.loads(ev or '[]')} for fid, cat, ev in rows}
 
 
 def _check(db, proposal, presented):
@@ -207,15 +208,34 @@ def _ids(presented, category):
     return [f for f, v in presented.items() if v['category'] == category]
 
 
-def test_rephoto_aimed_at_handover_while_citing_the_delivery_photo_is_dropped(seeded_db):
-    """The exact live mistake: target = handover record, cited photo = proof-of-delivery photo."""
+def test_rephoto_aimed_at_handover_while_citing_the_delivery_photo_is_retargeted(seeded_db):
+    """The exact live mistake: target = handover record, cited photo = proof-of-delivery photo.
+    The server picks the one cited photo record instead (both handover and delivery photos cited -> dropped below)."""
     _, presented = _demo_findings(seeded_db)
     handover, _ = _demo_event(seeded_db, 'handoff_submitted')
     _, pod_photos = _demo_event(seeded_db, 'pod_submitted')
     proposal = {'action_type': 'request_rephoto', 'source_event_id': handover, 'finding_ids': list(presented),
                 'reason': 'photo reused', 'evidence_ids': [handover] + pod_photos, 'draft_message': 'Please re-photo and re-weigh.'}
+    notes = {}
+    with get_connection(seeded_db) as conn:
+        checked, note = _check_proposal(conn, {'proposed_action': proposal}, 'PV-DEMO-001', set(proposal['evidence_ids']), presented, notes)
+    pod, _ = _demo_event(seeded_db, 'pod_submitted')
+    assert note is None and checked['proposed_action']['source_event_id'] == pod
+    assert notes['proposal_target_set_by_server'] == {'ai_named': handover, 'server_target': pod}
+
+
+def test_rephoto_citing_two_photo_records_is_dropped(seeded_db):
+    _, presented = _demo_findings(seeded_db)
+    handover, handover_photos = _demo_event(seeded_db, 'handoff_submitted')
+    pod, pod_photos = _demo_event(seeded_db, 'pod_submitted')
+    proposal = {'action_type': 'request_rephoto', 'source_event_id': dispatch_event(seeded_db), 'finding_ids': _ids(presented, 'photo_reuse'),
+                'reason': 'r', 'evidence_ids': handover_photos + pod_photos, 'draft_message': ''}
     checked, note = _check(seeded_db, proposal, presented)
-    assert checked['proposed_action'] is None and 'photo' in note
+    assert checked['proposed_action'] is None and note
+
+
+def dispatch_event(db):
+    return _demo_event(db, 'dispatch_confirmed')[0]
 
 
 def test_rephoto_on_the_photo_record_keeps_only_photo_findings_and_uses_fixed_wording(seeded_db):
@@ -229,7 +249,17 @@ def test_rephoto_on_the_photo_record_keeps_only_photo_findings_and_uses_fixed_wo
     assert 'proof of delivery' in kept['draft_message'] and 'weigh' not in kept['draft_message']
 
 
-@pytest.mark.parametrize('action,event_type,category', [('request_reweigh', 'pod_submitted', 'weight_diff'),
+def test_reweigh_aimed_at_delivery_goes_to_the_weighed_record_of_the_finding(seeded_db):
+    _, presented = _demo_findings(seeded_db)
+    pod, _ = _demo_event(seeded_db, 'pod_submitted')
+    handover, _ = _demo_event(seeded_db, 'handoff_submitted')
+    proposal = {'action_type': 'request_reweigh', 'source_event_id': pod, 'finding_ids': _ids(presented, 'weight_diff'),
+                'reason': 'r', 'evidence_ids': [pod], 'draft_message': ''}
+    checked, note = _check(seeded_db, proposal, presented)
+    assert note is None and checked['proposed_action']['source_event_id'] == handover
+
+
+@pytest.mark.parametrize('action,event_type,category', [('request_reweigh', 'dispatch_confirmed', 'photo_reuse'),
                                                        ('request_reweigh', 'handoff_submitted', 'photo_reuse')])
 def test_request_must_match_target_and_finding_kind(seeded_db, action, event_type, category):
     _, presented = _demo_findings(seeded_db)
@@ -262,3 +292,65 @@ def test_photo_reuse_result_names_the_record_of_each_photo(seeded_db):
     types[('photo', pod_photos[0])] = (pod, 'pod_submitted')
     encoded, _ = _tool_message(out, types)
     assert '"photo_record":"proof of delivery"' in encoded
+
+
+# --- visual claims (live missing-evidence run) and one bounded rewrite -----------------
+from agent.runner import _validate_report, ClaimRejected
+
+
+def _claim_report(text):
+    return dict(valid_report(), case_id='C', facts=[{'text': text, 'evidence_ids': ['E1']}])
+
+
+@pytest.mark.parametrize('text', ['Proof of delivery photo confirms delivery to the expected location.',
+                                  'The handover image clearly shows the parcel.', 'Photos verify the seal.'])
+def test_visual_confirmation_is_rejected(text):
+    with pytest.raises(ClaimRejected):
+        _validate_report(_claim_report(text), 'C', {'E1'})
+
+
+@pytest.mark.parametrize('text', ['The photo reuse check shows an exact match with PV-SHIP-010.',
+                                  'Photo 26f7 has the same file hash as a photo on another shipment.'])
+def test_record_level_photo_statements_are_allowed(text):
+    _validate_report(_claim_report(text), 'C', {'E1'})
+
+
+def test_forbidden_wording_gets_one_rewrite_then_saves(seeded_db):
+    case = _create_case_for_investigation(seeded_db)
+    bad = dict(valid_report(), summary='The delivery photo confirms the address.')
+    provider = ScriptedProvider([{'done': True}, bad, valid_report()])
+    result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=provider)
+    assert result['status'] == 'completed', result.get('error')
+    assert provider.calls == [False, True, True]
+    assert result['diagnostics']['claim_rewrite'] == {'term': 'photo confirms', 'outcome': 'passed'}
+
+
+def test_second_forbidden_wording_fails_closed(seeded_db):
+    case = _create_case_for_investigation(seeded_db)
+    bad = dict(valid_report(), summary='The delivery photo confirms the address.')
+    provider = ScriptedProvider([{'done': True}, bad, bad])
+    result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=provider)
+    assert result['status'] != 'completed' and result['report'] is None
+    assert provider.calls == [False, True, True]
+
+
+def test_server_weight_target_rejects_multiple_finding_records_even_if_model_names_one(seeded_db):
+    import json
+    from agent.runner import _resolve_target
+    handover, _ = _demo_event(seeded_db, 'handoff_submitted')
+    pod, _ = _demo_event(seeded_db, 'pod_submitted')
+    with get_connection(seeded_db) as conn:
+        payload=json.loads(conn.execute('SELECT payload_json FROM events WHERE event_id=?',(pod,)).fetchone()[0])
+        payload['weight_g']=1900
+        conn.execute('UPDATE events SET payload_json=? WHERE event_id=?',(json.dumps(payload),pod))
+        proposal={'action_type':'request_reweigh','source_event_id':handover,'evidence_ids':[handover]}
+        assert _resolve_target(conn,proposal,'PV-DEMO-001',[{'evidence_ids':[handover,pod]}]) is None
+
+
+def test_server_weight_target_cannot_use_only_a_model_cited_record(seeded_db):
+    from agent.runner import _resolve_target
+    handover, _ = _demo_event(seeded_db, 'handoff_submitted')
+    pod, _ = _demo_event(seeded_db, 'pod_submitted')
+    with get_connection(seeded_db) as conn:
+        proposal={'action_type':'request_reweigh','source_event_id':handover,'evidence_ids':[handover]}
+        assert _resolve_target(conn,proposal,'PV-DEMO-001',[{'evidence_ids':[pod]}]) is None

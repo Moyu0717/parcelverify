@@ -1,5 +1,30 @@
 # ParcelVerify implementation handoff — 14 October 2026
 
+## Target resolution and one claim rewrite — 4 November 2026
+
+The hosted configuration was read before deployment and already selects
+`openai/gpt-oss-120b` on Groq. No credential or model setting was copied locally,
+and the code default remains unchanged. Groq's public free-plan table lists both
+GPT-OSS sizes at 8K TPM and 200K TPD; the owner's exact organization Limits page
+has not been independently accessed. No plan upgrade or quota increase is used.
+
+This patch resolves proposal targets from cited records on the server and logs
+any change from the model-named target. Measurement targets must be linked by
+the selected finding; multiple eligible records remain ambiguous and cannot be
+submitted. Review found and removed a model-named tie-break in the supplied
+patch, with two additional regressions covering ambiguity and unrelated records.
+
+Visual/blame phrase failures allow one complete-report rewrite using the same
+evidence and shared request/deadline limits. A repeated violation still fails
+without a report or proposal; diagnostics retain the matched phrase, not a full
+rejected provider response. Record-level photo matching remains permitted.
+
+Targeted proposal tests: 35 passed. Full regression: 322 passed in 278.78 seconds.
+Deployment and live results are recorded
+in `qa/artifacts/target-claim-120b/`. Live scenarios must be executed once each,
+with at least two minutes between runs. Single mode and human approval remain;
+no reviewed pipeline or UI migration is included in this patch.
+
 ## Current delivery note — 3 November 2026, token reservation patch
 
 The historical notes below describe earlier releases. Current inference uses
