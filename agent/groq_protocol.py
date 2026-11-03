@@ -42,3 +42,28 @@ def read_selection(message):
     value=json.loads(message.get('content') or '')
     if value!={'done':True}:raise ValueError('Expected a local function call or a done decision')
     return json.dumps(value)
+
+# JSON selection: the same whitelisted functions, chosen as JSON text instead of
+# provider-native tool calls. Used when Groq rejects a native call
+# (tool_use_failed), which open-weight models trigger by inventing names.
+def json_selection_instructions():
+    lines=[]
+    for name,(description,properties) in TOOL_REGISTRY.items():
+        params=', '.join(key+' (string)' for key in properties) or 'no parameters'
+        lines.append('- '+name+': '+description+' Params: '+params+'.')
+    return (' FUNCTION SELECTION FORMAT: reply with ONLY one JSON object. To read records: {"tool":"<name>","params":{}} '
+            'using exactly one of these names:\n'+'\n'.join(lines)+'\nWhen enough evidence is retrieved: {"done":true}. '
+            'Never repeat a call that already returned data. Do not write the report yet.')
+
+def read_json_selection(content):
+    value=json.loads(content or '')
+    if not isinstance(value,dict):raise ValueError('Expected a JSON object selection')
+    if value.get('done') is True:return json.dumps({'done':True})
+    call=value.get('tool_call') if isinstance(value.get('tool_call'),dict) else value
+    name=call.get('tool') or call.get('name')
+    params=call.get('params',call.get('arguments',{}))
+    if isinstance(params,str):params=json.loads(params or '{}')
+    if params is None:params={}
+    if isinstance(name,str) and name.startswith('functions.'):name=name[len('functions.'):]
+    validate_tool_arguments(name,params)
+    return json.dumps({'tool_call':{'tool':name,'params':params}})

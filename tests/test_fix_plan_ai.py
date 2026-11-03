@@ -18,19 +18,24 @@ def test_second_request_unregistered_function_correction_is_bounded(seeded_db,mo
     def handler(request):
         data=json.loads(request.content);seen.append(data);index=len(seen)
         if index==1:return response(call('get_case_context','call_actual_original'),'tool_calls')
-        if index in (2,3):
+        if index==2:
             assert {t['function']['name'] for t in data['tools']}==set(TOOL_REGISTRY)
             assert data['messages'][-2]['tool_calls'][0]['id']=='call_actual_original'
             assert data['messages'][-1]['tool_call_id']=='call_actual_original'
             assert data['messages'][-1]['name']=='get_case_context'
-            if index==2 or not recover:
-                return httpx.Response(400,json={'error':{'code':'tool_use_failed','type':'invalid_request_error',
-                    'message':"Failed to call a function. Attempted function 'get_vendor_contract' was not in request.tools.",
-                    'failed_generation':'private evidence and private-test-key'}})
+            return httpx.Response(400,json={'error':{'code':'tool_use_failed','type':'invalid_request_error',
+                'message':"Failed to call a function. Attempted function 'get_vendor_contract' was not in request.tools.",
+                'failed_generation':'private evidence and private-test-key'}})
+        if index==3:
+            # Native calling was rejected: the retry uses the same whitelist as JSON text.
+            assert 'tools' not in data and data['response_format']=={'type':'json_object'}
             assert 'previous request was rejected' in data['messages'][0]['content']
-            return response(call('get_context_events','call_actual_second'),'tool_calls')
+            assert 'FUNCTION SELECTION FORMAT' in data['messages'][0]['content']
+            assert all(m['role']!='tool' for m in data['messages'])
+            if not recover:return response({'content':'{"tool":"get_vendor_contract","params":{}}'})
+            return response({'content':'{"tool":"get_context_events","params":{}}'})
         if index==4:
-            assert data['messages'][-1]['tool_call_id']=='call_actual_second'
+            assert 'tools' not in data and 'get_context_events' in data['messages'][-2]['content']
             return response({'content':'{"done":true}'})
         assert index==5 and 'tools' not in data
         refs=json.loads(data['messages'][-1]['content'].split('Valid IDs: ')[1])
@@ -46,7 +51,8 @@ def test_second_request_unregistered_function_correction_is_bounded(seeded_db,mo
     assert len(result['tool_calls'])==(2 if recover else 1)
     with get_connection(seeded_db) as conn:
         assert conn.execute('SELECT COUNT(*) FROM report_versions').fetchone()[0]==(1 if recover else 0)
-    assert result['status']==('completed' if recover else 'invalid_output')
+    assert result['status']==('completed' if recover else 'error')
+    if not recover:assert 'Unknown model-selected tool' in result['error']
 
 @pytest.mark.parametrize('name,arguments',[
  ('functions.compare_handoff',{}),('compare_handoff',{'shipment_id':'other'}),

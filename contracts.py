@@ -287,6 +287,7 @@ SCORING_MAP: dict[str, int] = {
     "location_conflict": 10,
     "time_conflict": 10,
     "access_anomaly": 10,
+    "count_discrepancy": 20,   # package count differs; scan status unknown (blocking regardless of score)
 }
 
 MAX_SCORE: int = 100
@@ -305,7 +306,7 @@ DISPLAY_THRESHOLD_SHIPMENTS: int = 20
 
 # Investigation constraints
 MAX_TOOL_ROUNDS: int = 4
-TOTAL_TIME_BUDGET_S: int = 120
+TOTAL_TIME_BUDGET_S: int = 240  # free-tier Groq (8K tokens/min) needs ~1-3 min for a full run
 
 # Rule version
 RULE_VERSION: str = "1.1.0"

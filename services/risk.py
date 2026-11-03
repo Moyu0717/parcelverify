@@ -36,6 +36,7 @@ def calculate_priority(
     - location_conflict: 10 pts
     - time_conflict: 10 pts
     - access_anomaly: 10 pts
+    - count_discrepancy: 20 pts (also blocking, so it always reaches review)
 
     review_queue = (total_score >= 30) OR (len(blocking_issues) > 0)  — D-013
     """
@@ -69,9 +70,11 @@ def calculate_priority(
             score_key = "time_conflict"
         elif category == "access_anomaly":
             score_key = "access_anomaly"
+        elif category == "count_discrepancy":
+            score_key = "count_discrepancy"
 
         if score_key is None:
-            # Categories without scoring (e.g., count_discrepancy) don't add score
+            # Categories without scoring don't add score
             items.append({
                 "category": category,
                 "score": 0,

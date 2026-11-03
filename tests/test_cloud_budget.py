@@ -5,6 +5,7 @@ from tests.test_agent import seeded_db,ADMIN_ACTOR,_create_case_for_investigatio
 
 def test_rolling_window_wait_stays_inside_budget_without_extra_provider_calls(seeded_db,monkeypatch,tmp_path):
     monkeypatch.setenv('PV_DATA_DIR',str(tmp_path))
+    monkeypatch.setenv('GROQ_MINUTE_TOKENS','5000')
     clock=[1000.0]
     monkeypatch.setattr('agent.usage.time.time',lambda:clock[0])
     monkeypatch.setattr('agent.runner.time.monotonic',lambda:clock[0])
@@ -19,4 +20,4 @@ def test_rolling_window_wait_stays_inside_budget_without_extra_provider_calls(se
     with sqlite3.connect(tmp_path/'groq-usage.db') as conn:records=conn.execute('SELECT at,estimated_tokens FROM requests ORDER BY at').fetchall()
     assert len(records)==3
     for stamp,_ in records:
-        assert sum(tokens for at,tokens in records if stamp-60<=at<=stamp)<=6000
+        assert sum(tokens for at,tokens in records if stamp-60<=at<=stamp)<=5000

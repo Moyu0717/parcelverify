@@ -106,15 +106,16 @@ def settings():
 
 def help_page():
     st.title("Help")
-    st.subheader("A simple review loop")
-    st.write("1. Open a case from Home, or find a shipment by its reference in Cases.")
-    st.write("2. Check the concern and its evidence. Missing information is not a mismatch.")
-    st.write("3. Submit the next step for approval, or record an authorized review decision.")
-    st.info("Groq explanations are optional. Review the evidence and use the human approval workflow when AI is unavailable.")
-    st.caption("Operational actions and identities are simulated. Demonstration images are not verified parcel photographs. Flags need review; they do not prove wrongdoing.")
+    st.subheader("Four steps, one button at a time")
+    st.write("1. **Check** — open a case from Home (or tap its building on the 3D map). The yellow building is the record that differs; a dashed building is a missing record.")
+    st.write("2. **Ask for proof** — choose what you need (weigh again, new photo, count packages) and send the request. A supervisor approves it with one click: *Approve & send to partner*. On the map the van drives from HQ to that stop.")
+    st.write("3. **Review the reply** — when the partner answers, the van returns to HQ with a parcel. Compare the new value with the expected one, then *Accept evidence* or *Ask again*.")
+    st.write("4. **Finish** — choose *Verified* or *Close with open questions*, say why and press *Finish case*. A verified case turns the route green.")
+    st.info("Tap any building on the map to see what was recorded there, open the original record, or ask the partner to re-check exactly that stop. Groq AI explanations are optional.")
+    st.caption("Roles are simulated: use the account menu (or the Switch button shown in a step) to act as Investigator, Supervisor or Partner. Operational actions are simulated and no message leaves the demo. Flags need review; they do not prove wrongdoing.")
     st.subheader('Try both checks')
-    st.write('Data access: open Workspace → Settings → Demo tools. Select Partner / QuickRun Logistics and check PV-DEMO-001. Then select SafeLog Express and repeat: access is denied without parcel details. Return to Administrator to inspect the recorded denial.')
-    st.write('Shipment evidence: open Cases and find PV-DEMO-001 for the weight/photo case, PV-SHIP-011 for a documented packaging explanation and authorized export, or PV-SHIP-021 for missing evidence. Later account access is labelled separately from the earlier delivery.')
+    st.write('Data access: open the account menu, choose Partner, then Settings → Demo tools and check PV-DEMO-001 as QuickRun Logistics, then as SafeLog Express: access is denied without parcel details. Return to Administrator to inspect the recorded denial.')
+    st.write('Shipment evidence: open Cases and find PV-DEMO-001 for the weight/photo case, PV-SHIP-011 for a documented packaging explanation and authorized export, or PV-SHIP-021 for missing evidence.')
 
 def main():
     apply_theme()

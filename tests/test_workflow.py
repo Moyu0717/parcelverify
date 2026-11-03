@@ -14,6 +14,7 @@ from services.workflow import initialize_reviews, submit_handoff, process_eviden
 from services.risk import get_partner_metrics
 
 ADMIN = {"actor_id": "ADMIN-001", "role": "admin", "session_id": "acceptance"}
+SUPERVISOR={'actor_id':'APPROVER-001','role':'approver','session_id':'separate-approver'}  # separation of duties: proposer cannot approve
 
 @pytest.fixture
 def database(tmp_path):
@@ -42,7 +43,7 @@ def test_workflow_persists_and_duplicate_submission_no_duplicate_case(database):
     with get_connection(database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM case_records WHERE triggering_event_id=?", (first["event"]["event_id"],)).fetchone()[0] == 1
     action = propose_action(database, first["case"]["case_id"], "request_reweigh", ADMIN)
-    review_action(database, action["action_id"], "approve", ADMIN)
+    review_action(database, action["action_id"], "approve", SUPERVISOR,'Reviewed the evidence for this test')
     assert execute_action(database, action["action_id"], ADMIN)["status"] == "executed"
     assert execute_action(database, action["action_id"], ADMIN)["status"] == "already_executed"
     with get_connection(database) as conn:

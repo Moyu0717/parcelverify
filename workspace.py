@@ -19,10 +19,10 @@ _TEMPLATE_LOCK = threading.Lock()
 def _prepare_template():
     """Reuse only initial synthetic records; never copy a visitor's mutable data."""
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
-    template = DATA_ROOT / "demo-template-v5-versioned.db"
+    template = DATA_ROOT / "demo-template-v6-versioned.db"
     with _TEMPLATE_LOCK:
         if not template.exists():
-            temporary = DATA_ROOT / "demo-template-v5-versioned.build.db"
+            temporary = DATA_ROOT / "demo-template-v6-versioned.build.db"
             init_db(str(temporary))
             seed_demo(str(temporary), seed=42)
             from services.workflow import initialize_reviews

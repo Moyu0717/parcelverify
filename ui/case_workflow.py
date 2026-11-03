@@ -105,10 +105,12 @@ def photo_comparison(case):
             st.caption(f'{len(near)} permitted near-image candidates need manual comparison; visual similarity is not exact file equality.')
             st.caption('Exact matches compare file bytes. Candidate counts are not confirmed problems.')
 
-def next_step(case):
+def next_step(case,focus=None):
     from ui import workspace_ui as work
     path,actor=context();tasks=list_tasks(path,case['case_id'],actor)
-    live=[t for t in tasks if t['status'] in ('open','received')]
+    focus=focus or {}
+    if focus.get('task_id'):tasks=[t for t in tasks if t['task_id']==focus['task_id']]
+    live=[] if focus.get('draft') else [t for t in tasks if t['status'] in ('open','received')]
     if case['work_bucket']=='resolved':
         st.success('Case closed: '+humanize(case.get('closure_outcome') or 'closed_unresolved'))
         if actor['role'] in ('admin','investigator','approver'):
@@ -118,8 +120,8 @@ def next_step(case):
                 except ValueError as error:st.error(str(error))
         return
     pending_action=case['has_proposed_actions'] or case['has_approved_actions']
-    if pending_action:
-        work.next_step(case,show_review=False)
+    if pending_action and not focus.get('task_id'):
+        work.next_step(case,show_review=False,focus_action_id=focus.get('action_id'))
     if live:
         st.subheader('Follow-up evidence')
         st.caption(f'{len(live)} tasks remain. A response still needs internal review.')
@@ -128,7 +130,7 @@ def next_step(case):
             st.caption(task['description'] or 'Supply the requested context.')
             st.caption('Shipment '+task['shipment_id']+' · '+('assigned partner or operations submits' if task['status']=='open' else 'an investigator or supervisor reviews'))
             if task['status']=='open' and actor['role'] in ('admin','investigator','partner_user'):
-                with st.expander('Supply evidence',expanded=actor['role']=='partner_user'):
+                with st.expander('Supply evidence',expanded=actor['role']=='partner_user' or focus.get('task_id')==task['task_id']):
                     with st.form('response-'+task['task_id']):
                         from services.handoff import compare_handoff
                         weight=st.text_input('New weight (kg)') if task['task_type']=='reweigh' or compare_handoff(path,task['shipment_id'])['weight_g']['actual'] is None else ''
@@ -173,7 +175,9 @@ def next_step(case):
                             st.session_state.get('task_recorded_times',{}).pop(task['task_id'],None)
                             work.notice('Evidence review recorded. Review the remaining findings.');st.rerun()
                         except ValueError as error:st.error(str(error))
-    elif not pending_action:work.next_step(case,show_review=False)
+    elif not pending_action and not focus.get('task_id'):work.next_step(case,show_review=False,focus_action_id=focus.get('action_id'))
+    if focus.get('task_id') and not live:
+        st.info('This selected task is '+humanize(tasks[0]['status'])+'. Review findings below to record a case outcome.' if tasks else 'This task is no longer available.')
     if actor['role'] in ('admin','investigator','approver'):
         ctx=get_case_context(path,case['case_id'],actor)
         with st.expander('Review findings and record an outcome'):

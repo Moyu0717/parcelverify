@@ -380,26 +380,20 @@ def evaluate_handoff(
         # Count check (D-003)
         count = cmp["count"]
         if count["match"] is False:
-            # Check for per-item scan
-            scan = conn.execute(
-                """SELECT 1 FROM events
-                   WHERE shipment_id = ? AND event_type = 'approved_batch_job'
-                   AND payload_json LIKE '%scan%'
-                   LIMIT 1""",
-                (shipment_id,),
-            ).fetchone()
-            if not scan:
-                missing_evidence.append("per_item_scan")
+            # Conservative rule: the prototype has no structured per-item scan records,
+            # so free text that mentions "scan" is never treated as proof. A count
+            # difference always needs review and the scan status stays unknown.
+            missing_evidence.append("per_item_scan")
             findings.append({
                 "category": "count_discrepancy",
                 "description": (
                     f"Count discrepancy: expected {count['expected']}, "
-                    f"actual {count['actual']}. "
-                    f"{'No per-item scan available.' if not scan else 'Scan confirmed.'}"
+                    f"actual {count['actual']}. Per-item scan status unknown; needs review."
                 ),
-                "severity": "info",
+                "severity": "blocking",
                 "evidence_ids": [event_id],
             })
+            blocking_issues.append("count_discrepancy_unverified")
 
         # Photo reuse check
         photos = conn.execute(

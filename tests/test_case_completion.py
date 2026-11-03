@@ -13,6 +13,7 @@ from services.case_export import export_case
 from services.access_patterns import evaluate_access_patterns
 
 ADMIN={'actor_id':'ADMIN-001','role':'admin','session_id':'completion'}
+SUPERVISOR={'actor_id':'APPROVER-001','role':'approver','session_id':'separate-approver'}  # separation of duties: proposer cannot approve
 PARTNER={'actor_id':'ACTOR-QR-01','partner_id':'P-QUICKRUN','role':'partner_user','session_id':'completion'}
 STRANGER={'actor_id':'ACTOR-SL-01','partner_id':'P-SAFELOG','role':'partner_user','session_id':'completion'}
 
@@ -24,7 +25,7 @@ def demo(tmp_path):
 
 def request(path,cid):
     action=propose_action(path,cid,'request_reweigh',ADMIN,reason='Check the unexplained weight difference')
-    review_action(path,action['action_id'],'approve',ADMIN,'Review evidence and obtain a fresh measurement')
+    review_action(path,action['action_id'],'approve',SUPERVISOR,'Review evidence and obtain a fresh measurement')
     result=execute_action(path,action['action_id'],ADMIN)
     return action['action_id'],result['after']['evidence_task_id']
 
@@ -77,7 +78,7 @@ def test_permissions_and_retry_do_not_leak(demo):
 def test_revision_invalidates_approval(demo):
     path,cid=demo
     action=propose_action(path,cid,'request_reweigh',ADMIN,reason='Obtain a new scale measurement')
-    review_action(path,action['action_id'],'approve',ADMIN,'Reviewed the original measurement request')
+    review_action(path,action['action_id'],'approve',SUPERVISOR,'Reviewed the original measurement request')
     revised=revise_request(path,action['action_id'],ADMIN,'Use a calibrated scale and attach its reading',request_id='revision-1')
     assert execute_action(path,action['action_id'],ADMIN)['status']=='not_approved'
     assert execute_action(path,revised['action_id'],ADMIN)['status']=='not_approved'
@@ -96,7 +97,7 @@ def test_failed_submission_audit_rolls_back(demo,monkeypatch):
 def test_approval_is_bound_to_exact_request(demo):
     path,cid=demo
     action=propose_action(path,cid,'request_reweigh',ADMIN,reason='Original authorized weight check')
-    review_action(path,action['action_id'],'approve',ADMIN,'Approve this exact measurement request')
+    review_action(path,action['action_id'],'approve',SUPERVISOR,'Approve this exact measurement request')
     with get_connection(path) as conn:conn.execute("UPDATE action_requests SET reason='A different request after approval' WHERE action_id=?",(action['action_id'],))
     with pytest.raises(Exception,match='approval'):execute_action(path,action['action_id'],ADMIN)
 

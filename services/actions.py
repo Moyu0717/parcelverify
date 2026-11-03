@@ -41,6 +41,16 @@ def _validate_actor(actor_context: dict) -> ActorContext:
     return ActorContext(**actor_context)
 
 
+# The investigation agent proposes under this server-assigned prefix. It may never
+# approve, reject or execute; separation of duties is enforced here, not in the UI.
+AGENT_ACTOR_PREFIX = "AGENT-"
+MIN_DECISION_REASON = 10
+
+
+def _is_agent(actor: ActorContext) -> bool:
+    return actor.actor_id.upper().startswith(AGENT_ACTOR_PREFIX)
+
+
 def propose_action(
     db_path: str = "data/parcelverify.db",
     case_id: str = "",
@@ -80,6 +90,13 @@ def propose_action(
         target_id = kwargs.get("target_id", case[3] or "")  # shipment_id
         expires_at = kwargs.get("expires_at")
         reason = kwargs.get("reason", "")
+        source_event_id = kwargs.get("source_event_id")
+        if source_event_id is not None:
+            from services.cases import require_case, permitted_evidence
+            require_case(conn, case_id, actor)
+            source = conn.execute('SELECT shipment_id FROM events WHERE event_id=?', (source_event_id,)).fetchone()
+            if not source or source[0] != case[3] or not permitted_evidence(conn, source_event_id, actor):
+                raise AuthorizationError('The selected source must be a permitted event on this shipment')
 
         if request_id is not None:
             existing = conn.execute(
@@ -89,6 +106,10 @@ def propose_action(
             if existing:
                 if existing[:5] != (case_id, action_type, target_id, actor.actor_id, reason):
                     raise IdempotencyError("request_id is already used for a different action intent")
+                previous = conn.execute("SELECT details_json FROM audit_log WHERE case_id=? AND operation='action_proposed'", (case_id,)).fetchall()
+                linked = next((json.loads(row[0]).get('source_event_id') for row in previous if json.loads(row[0]).get('action_id') == action_id), None)
+                if linked != source_event_id:
+                    raise IdempotencyError('request_id is already used for another source event')
                 return {"action_id": action_id, "status": existing[5], "is_new": False}
 
         conn.execute(
@@ -101,7 +122,7 @@ def propose_action(
              ActionStatus.PROPOSED.value, actor.actor_id,
              expires_at, reason),
         )
-        append_audit(db_path,actor.actor_id,case_id,'action_proposed',dict(action_id=action_id,action_type=action_type,reason=reason,target_id=target_id),tx=conn)
+        append_audit(db_path,actor.actor_id,case_id,'action_proposed',dict(action_id=action_id,action_type=action_type,reason=reason,target_id=target_id,source_event_id=source_event_id),tx=conn)
         conn.commit()
 
         return {"action_id": action_id, "status": ActionStatus.PROPOSED.value, "is_new": True}
@@ -125,15 +146,19 @@ def review_action(
     if actor.is_simulated and actor.actor_id in ('SYSTEM-DEMO','SYSTEM-VERIFICATION'):
         raise AuthorizationError('System detection cannot approve a human request')
 
+    if _is_agent(actor):
+        raise AuthorizationError('The investigation agent can propose requests but cannot approve or reject them')
     if decision not in ("approve", "reject"):
         raise ValueError(f"Invalid decision: {decision}. Must be 'approve' or 'reject'")
-    reason=reason.strip() or ('Supervisor approved the recorded request.' if decision=='approve' else 'Supervisor rejected the recorded request.')
+    reason=(reason or '').strip()
+    if len(reason)<MIN_DECISION_REASON:
+        raise ValueError('Write the reason for this decision (at least '+str(MIN_DECISION_REASON)+' characters).')
 
     conn = get_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         action = conn.execute(
-            "SELECT action_id, case_id, status, action_type, target_id "
+            "SELECT action_id, case_id, status, action_type, target_id, requested_by "
             "FROM action_requests WHERE action_id = ?",
             (action_id,),
         ).fetchone()
@@ -141,7 +166,11 @@ def review_action(
         if not action:
             raise ValueError(f"Action {action_id} not found")
 
-        _, case_id, status, action_type, target_id = action
+        _, case_id, status, action_type, target_id, requested_by = action
+        # Separation of duties: whoever proposed a request cannot approve it.
+        # (Withdrawing one's own proposal by rejecting it stays allowed.)
+        if decision == "approve" and requested_by and requested_by == actor.actor_id:
+            raise AuthorizationError('You proposed this request, so a different person must approve it')
 
         # Only approvers and admins can review
         if actor.role not in ("approver", "admin"):
@@ -221,6 +250,8 @@ def execute_action(
     Rollback on failure → status=failed, no partial state (D-019).
     """
     actor = _validate_actor(actor_context or {})
+    if _is_agent(actor):
+        raise AuthorizationError('The investigation agent cannot execute requests')
     if actor.role not in ("approver", "admin"):
         raise AuthorizationError("Only a current approver or admin may execute actions")
     conn = get_connection(db_path)
@@ -283,6 +314,11 @@ def execute_action(
         fingerprint=hashlib.sha256(json.dumps([action_id,action_type,target_id,reason]).encode()).hexdigest()
         if not approved_by or not any(json.loads(row[0]).get("action_id") == action_id and json.loads(row[0]).get('request_fingerprint')==fingerprint for row in approval):
             raise AuthorizationError("Action has no verified approval record")
+        requester = conn.execute('SELECT requested_by FROM action_requests WHERE action_id=?', (action_id,)).fetchone()[0]
+        if requester and approved_by == requester:
+            raise AuthorizationError("This request was approved by the person who proposed it; a different approver is required")
+        if approved_by.upper().startswith(AGENT_ACTOR_PREFIX):
+            raise AuthorizationError("An agent identity cannot approve requests")
         if status not in (ActionStatus.APPROVED.value, ActionStatus.FAILED.value):
             raise AuthorizationError("Action is not approved")
 

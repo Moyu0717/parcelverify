@@ -95,7 +95,7 @@ class TestProposeAction:
         first = propose_action(seeded_db, case['case_id'], 'request_reweigh', INVESTIGATOR,
                                request_id='draft-1', reason='Check weight')
         assert first['is_new'] is True
-        review_action(seeded_db, first['action_id'], 'approve', APPROVER)
+        review_action(seeded_db, first['action_id'], 'approve', APPROVER,'Reviewed the evidence for this test')
         retry = propose_action(seeded_db, case['case_id'], 'request_reweigh', INVESTIGATOR,
                                request_id='draft-1', reason='Check weight')
         assert retry == dict(action_id='draft-1', status='approved', is_new=False)
@@ -163,7 +163,7 @@ class TestReviewAction:
         """Approver can approve a proposed action."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        result = review_action(seeded_db, action["action_id"], "approve", APPROVER)
+        result = review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
         assert result["status"] == "approved"
         assert result["approved_by"] == "APPROVER-001"
 
@@ -171,14 +171,14 @@ class TestReviewAction:
         """Approver can reject a proposed action."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        result = review_action(seeded_db, action["action_id"], "reject", APPROVER)
+        result = review_action(seeded_db, action["action_id"], "reject", APPROVER,'Reviewed the evidence for this test')
         assert result["status"] == "rejected"
 
     def test_rejected_is_terminal(self, seeded_db):
         """Cannot execute a rejected action (D-019)."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        review_action(seeded_db, action["action_id"], "reject", APPROVER)
+        review_action(seeded_db, action["action_id"], "reject", APPROVER,'Reviewed the evidence for this test')
         result = execute_action(seeded_db, action["action_id"], ADMIN)
         assert result["status"] == "not_approved"
 
@@ -186,16 +186,16 @@ class TestReviewAction:
         """Cannot review an action that is already rejected (D-019)."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        review_action(seeded_db, action["action_id"], "reject", APPROVER)
+        review_action(seeded_db, action["action_id"], "reject", APPROVER,'Reviewed the evidence for this test')
         with pytest.raises(IdempotencyError):
-            review_action(seeded_db, action["action_id"], "approve", APPROVER)
+            review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
 
     def test_partner_user_cannot_review(self, seeded_db):
         """Partner users cannot review actions."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
         with pytest.raises(AuthorizationError):
-            review_action(seeded_db, action["action_id"], "approve", PARTNER_USER)
+            review_action(seeded_db, action["action_id"], "approve", PARTNER_USER,'Reviewed the evidence for this test')
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ class TestExecuteAction:
         """Execute an approved action successfully."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        review_action(seeded_db, action["action_id"], "approve", APPROVER)
+        review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
         result = execute_action(seeded_db, action["action_id"], ADMIN)
         assert result["status"] == "executed"
         assert result["before"] is not None
@@ -217,7 +217,7 @@ class TestExecuteAction:
         """Executing twice returns already_executed (D-019 pre-check 5)."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        review_action(seeded_db, action["action_id"], "approve", APPROVER)
+        review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
         execute_action(seeded_db, action["action_id"], ADMIN)
         result = execute_action(seeded_db, action["action_id"], ADMIN)
         assert result["status"] == "already_executed"
@@ -233,7 +233,7 @@ class TestExecuteAction:
         """Executing a rejected action returns not_approved."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        review_action(seeded_db, action["action_id"], "reject", APPROVER)
+        review_action(seeded_db, action["action_id"], "reject", APPROVER,'Reviewed the evidence for this test')
         result = execute_action(seeded_db, action["action_id"], ADMIN)
         assert result["status"] == "not_approved"
 
@@ -241,7 +241,7 @@ class TestExecuteAction:
         """Executing an action writes an audit record in the same transaction."""
         case = _create_case(seeded_db)
         action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-        review_action(seeded_db, action["action_id"], "approve", APPROVER)
+        review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
         execute_action(seeded_db, action["action_id"], ADMIN)
 
         conn = get_connection(seeded_db)
@@ -350,7 +350,7 @@ class TestExportAudit:
 def test_executed_request_creates_verification_task(seeded_db, action_type, task_type):
     case = _create_case(seeded_db)
     action = propose_action(seeded_db, case["case_id"], action_type, INVESTIGATOR, reason="Verify linked measurements")
-    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
     result = execute_action(seeded_db, action["action_id"], ADMIN)
     assert result["status"] == "executed"
     conn = get_connection(seeded_db)
@@ -366,7 +366,7 @@ def test_executed_request_creates_verification_task(seeded_db, action_type, task
 def test_executed_hold_persists_audited_shipment_state(seeded_db, action_type):
     case = _create_case(seeded_db)
     action = propose_action(seeded_db, case["case_id"], action_type, INVESTIGATOR)
-    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
     result = execute_action(seeded_db, action["action_id"], ADMIN)
     assert result["status"] == "executed"
     assert result["after"]["shipment_status"] == f"simulated_{action_type}"
@@ -383,7 +383,7 @@ def test_executed_hold_persists_audited_shipment_state(seeded_db, action_type):
 def test_failed_execution_audit_rolls_back_tasks_and_shipments(seeded_db, monkeypatch, action_type):
     case = _create_case(seeded_db)
     action = propose_action(seeded_db, case["case_id"], action_type, INVESTIGATOR)
-    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
     conn = get_connection(seeded_db)
     try:
         before = conn.execute("SELECT status FROM shipments WHERE shipment_id = 'PV-DEMO-001'").fetchone()[0]
@@ -407,7 +407,7 @@ def test_executed_request_reuses_existing_open_task(seeded_db):
     case = _create_case(seeded_db)
     task = create_evidence_task(seeded_db, case["case_id"], "reweigh", INVESTIGATOR, "Earlier verification request")
     action = propose_action(seeded_db, case["case_id"], "request_reweigh", INVESTIGATOR)
-    review_action(seeded_db, action["action_id"], "approve", APPROVER)
+    review_action(seeded_db, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
     result = execute_action(seeded_db, action["action_id"], ADMIN)
     assert result["after"]["evidence_task_id"] == task["task_id"]
     conn = get_connection(seeded_db)

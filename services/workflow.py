@@ -38,16 +38,26 @@ def submit_handoff(db_path, actor_context, shipment_id, event_type, payload, occ
 
 def initialize_reviews(db_path, actor_context):
     with get_connection(db_path) as conn:
-        if conn.execute("SELECT COUNT(*) FROM case_records").fetchone()[0]:
-            return
+        first_run = not conn.execute("SELECT COUNT(*) FROM case_records").fetchone()[0]
         # Completed seed shipments must be evaluated at their delivery cutoff;
         # evaluating an earlier handover hides already recorded delivery facts.
-        rows = conn.execute("SELECT shipment_id, event_id FROM events WHERE event_type='pod_submitted'").fetchall()
+        rows = conn.execute("SELECT shipment_id, event_id FROM events WHERE event_type='pod_submitted'").fetchall() if first_run else []
     for shipment_id, event_id in rows:
         process_evidence(db_path, actor_context, shipment_id, event_id)
-    from services.access_patterns import evaluate_access_patterns
-    for shipment_id in ('PV-DEMO-001','PV-SHIP-011'):
-        findings=evaluate_access_patterns(db_path,shipment_id)
-        if findings:create_or_update_case(db_path,shipment_id,'access:workload:'+shipment_id,findings,RULE_VERSION)
+    # Access-pattern detection runs on every call (case creation is idempotent per
+    # shipment), for every shipment that has a recorded workload baseline, not a
+    # fixed demo list. Limitation: shipments without a baseline are not checked,
+    # so this is not a general enumeration detector.
+    evaluate_recorded_access_patterns(db_path)
     from services.cases import ensure_case_links
     ensure_case_links(db_path,actor_context)
+
+
+def evaluate_recorded_access_patterns(db_path):
+    from services.access_patterns import evaluate_access_patterns
+    with get_connection(db_path) as conn:
+        shipment_ids=[r[0] for r in conn.execute("SELECT DISTINCT shipment_id FROM events WHERE event_type='workload_context' AND shipment_id IS NOT NULL ORDER BY shipment_id")]
+    for shipment_id in shipment_ids:
+        findings=evaluate_access_patterns(db_path,shipment_id)
+        if findings:create_or_update_case(db_path,shipment_id,'access:workload:'+shipment_id,findings,RULE_VERSION)
+    return shipment_ids

@@ -21,11 +21,13 @@ def reserve_request(estimated_tokens):
         conn.execute('DELETE FROM requests WHERE at < ?', (now-86400,))
         day=conn.execute('SELECT COUNT(*),COALESCE(SUM(estimated_tokens),0) FROM requests').fetchone()
         minute=conn.execute('SELECT COUNT(*),COALESCE(SUM(estimated_tokens),0) FROM requests WHERE at>=?',(now-60,)).fetchone()
-        if day[0]>=bounded_setting('GROQ_GLOBAL_DAILY',30,100) or day[1]+estimated_tokens>60000:
+        # Defaults stay under Groq's published gpt-oss limits (8K tokens/min, 200K tokens/day).
+        minute_tokens=bounded_setting('GROQ_MINUTE_TOKENS',7500,250000)
+        if day[0]>=bounded_setting('GROQ_GLOBAL_DAILY',60,300) or day[1]+estimated_tokens>bounded_setting('GROQ_DAILY_TOKENS',150000,2000000):
             raise UsageLimit('The shared demo daily AI limit is reached. Continue manual review and try later.')
-        if minute[0]>=10 or minute[1]+estimated_tokens>6000:
+        if minute[0]>=10 or minute[1]+estimated_tokens>minute_tokens:
             oldest=conn.execute('SELECT MIN(at) FROM requests WHERE at>=?',(now-60,)).fetchone()[0]
-            retry_after=max(.05,oldest+60.05-now) if oldest is not None and estimated_tokens<=6000 else None
+            retry_after=max(.05,oldest+60.05-now) if oldest is not None and estimated_tokens<=minute_tokens else None
             raise UsageLimit('A temporary demo AI usage limit is reached. Continue manual review and try again later.',retry_after)
         conn.execute('INSERT INTO requests VALUES (?,?)',(now,estimated_tokens))
 

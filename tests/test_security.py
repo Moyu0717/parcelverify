@@ -35,7 +35,7 @@ def sql(path, statement, parameters=()):
 def approved(path):
     case = create_or_update_case(path, "PV-DEMO-001", "test-trigger", [])
     action = propose_action(path, case["case_id"], "request_reweigh", ADMIN)
-    review_action(path, action["action_id"], "approve", APPROVER)
+    review_action(path, action["action_id"], "approve", APPROVER,'Reviewed the evidence for this test')
     return case["case_id"], action["action_id"]
 
 def test_past_timestamp_cannot_restore_live_access(database):

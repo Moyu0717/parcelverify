@@ -10,6 +10,7 @@ from pathlib import Path
 
 import streamlit as st
 from agent.runner import investigate_case
+from contracts import AuthorizationError
 from services.access import query_shipment, check_access_scope
 from services.actions import propose_action, review_action, execute_action, create_evidence_task
 from services.audit import export_audit
@@ -34,7 +35,8 @@ def cancel_request(case_id,cancelled=True):
 def draft_input(kind,label,scope,field,**kwargs):
     key="draft-"+scope+"-"+field
     saved=st.session_state.setdefault("drafts",{}).get(key,kwargs.pop("value",""))
-    return getattr(st,kind)(label,value=saved,key=key,on_change=remember_draft,args=(key,),**kwargs)
+    if key not in st.session_state:kwargs["value"]=saved
+    return getattr(st,kind)(label,key=key,on_change=remember_draft,args=(key,),**kwargs)
 
 def cases():
     from services.cases import list_cases
@@ -258,23 +260,30 @@ def ai_summary(case):
     if state['retry_at']:st.caption('Available after '+format_time(state['retry_at']))
     if state['reference'] and state['state'] not in ('not_started','completed','outdated'):
         st.caption('Review reference: '+state['reference'][-8:])
+    record=state['report_record'] if report else None
+    trace_run=record['run_id'] if record else state['reference']
+    if trace_run:agent_trace(trace_run,state['diagnostics'] if trace_run==state['reference'] else None)
     if report:
-        record=state['report_record']
-        st.caption(('Previous saved review' if state['previous_report'] else 'Saved review')+' · '+format_time(record['created_at'])+(' · earlier records' if state['report_outdated'] else ''))
-        st.write({'consistent':'Evidence is consistent','requires_review':'Human review is needed','needs_review':'Human review is needed','insufficient_evidence':'More evidence is needed'}[report['verdict']])
-        st.write(report['summary'])
-        with st.expander('Review conclusion and sources'):
+        from ui.case_workflow import source_label,source_view
+        st.caption(('Previous saved review' if state['previous_report'] else 'Saved review')+' · '+format_time(record['created_at'])+' · '+str(record.get('model_name') or 'Groq')+(' · earlier records' if state['report_outdated'] else ''))
+        with st.container(border=True,key='ai-recommendation'):
+            st.markdown('**AI recommendation** · '+{'consistent':'Evidence is consistent','requires_review':'Human review is needed','needs_review':'Human review is needed','insufficient_evidence':'More evidence is needed'}[report['verdict']])
+            st.write(report['summary'])
+            if report['recommended_action']:
+                st.info('Suggested next step: '+ACTION_LABELS.get(report['recommended_action'],report['recommended_action'])+'. A person must approve it; the AI cannot act.')
+            st.markdown('**Retrieved evidence behind each fact**')
             for fact_index,fact in enumerate(report['facts']):
-                st.write(fact['text'])
-                for identifier in fact['evidence_ids']:
-                    from ui.case_workflow import source_label,source_view
-                    if st.button(source_label(identifier),key='report-source-'+str(fact_index)+'-'+identifier):source_view(identifier)
+                st.write('• '+fact['text'])
+                cols=st.columns(max(1,min(3,len(fact['evidence_ids']))))
+                for n,identifier in enumerate(fact['evidence_ids']):
+                    if cols[n%len(cols)].button(source_label(identifier),key='report-source-'+str(fact_index)+'-'+identifier,icon=':material/description:'):source_view(identifier)
+            if report.get('alternative_explanations'):
+                st.markdown('**Possible legitimate explanations**')
+                for item in report['alternative_explanations']:st.write('• '+item)
             if report['missing_evidence']:
                 st.markdown('**What is missing**')
                 for item in report['missing_evidence']:st.write('• '+item)
-            for item in report.get('alternative_explanations',[]):st.write(item)
-            st.write('Suggested step: '+ACTION_LABELS.get(report['recommended_action'],report['recommended_action']))
-            st.caption('Text records only. AI does not inspect photographs or approve actions.')
+            st.caption('Safeguards passed: every fact cites evidence a tool returned · no blame, fraud or photo claims · read-only tools only · a person decides. '+(report.get('limitations') or 'Text records only. AI does not inspect photographs or approve actions.'))
     token=ai_request_token(case['case_id'])
     if actor['role'] in ('admin','investigator') and st.button(state['action'],disabled=not state['can_run'],key='ai-'+case['case_id']+'-'+token):
         with st.spinner('Reviewing the available evidence…'):
@@ -293,13 +302,44 @@ def ai_summary(case):
             st.download_button('Download AI diagnostic record',json.dumps({'run':state['run'],'tools':trace},indent=2),file_name='parcelverify-ai-diagnostic.json')
             if trace:st.json(trace)
 
-def next_step(case,show_review=True):
+TOOL_PURPOSE={'get_case_context':'Read the case findings and linked handoffs','get_shipment_timeline':'Read every recorded stop and photo ID',
+ 'compare_handoff':'Compare weight, count and seal with dispatch','find_photo_reuse':'Check if a photo was used on another shipment',
+ 'check_access_scope':'Read access-permission findings','get_context_events':'Look for approved repackaging or batch work',
+ 'get_vendor_context':'Read the partner contract','get_partner_metrics':'Read partner evidence metrics (context only)'}
+
+def agent_trace(run_id,diagnostics=None):
+    """Show which read-only tools the agent called and what evidence each returned."""
+    from ui.case_workflow import source_label
+    trace=rows('SELECT tool_name,parameters_json,evidence_ids_json,source,duration_ms FROM tool_executions WHERE run_id=? ORDER BY created_at,rowid',(run_id,))
+    diagnostics=diagnostics or {}
+    with st.container(border=True,key='ai-agent-trace'):
+        st.markdown('**Agent trace** · '+str(len(trace))+' tool call'+('' if len(trace)==1 else 's'))
+        if not trace:st.caption('No tool was called in this review.')
+        for n,tool in enumerate(trace,1):
+            try:params=json.loads(tool['parameters_json'] or '{}')
+            except ValueError:params={}
+            try:ids=json.loads(tool['evidence_ids_json'] or '[]')
+            except ValueError:ids=[]
+            chosen='chosen by AI' if tool['source']=='agent' else 'fixed safety plan'
+            st.markdown('**Step '+str(n)+'** · `'+tool['tool_name']+'('+(', '.join(k+'='+str(v) for k,v in params.items()))+')` · '+chosen)
+            st.caption(TOOL_PURPOSE.get(tool['tool_name'],'Read-only record lookup')+' → '+(str(len(ids))+' evidence record'+('' if len(ids)==1 else 's')+': '+'; '.join(source_label(i) for i in ids[:4])+(' …' if len(ids)>4 else '') if ids else 'no evidence returned'))
+        notes=[]
+        if diagnostics.get('protocol')=='json_selection':notes.append('Groq rejected a native function call, so the agent picked tools as checked JSON instead.')
+        if diagnostics.get('selection_fallback')=='server_plan':notes.append('The model could not pick a valid tool, so the server ran its fixed read-only plan; the report is still written by the model and checked.')
+        if diagnostics.get('retry_count'):notes.append('Retries used: '+str(diagnostics['retry_count'])+'.')
+        if notes:st.caption(' '.join(notes))
+
+def next_step(case,show_review=True,focus_action_id=None):
     path,actor=context()
     st.subheader("Choose what happens next")
     if case["status"]=="closed":
         st.success("This issue is resolved. Evidence and decisions remain available."); return
     actions=rows("SELECT action_id,action_type,status,reason FROM action_requests WHERE case_id=? ORDER BY rowid DESC",(case["case_id"],))
-    active=[a for a in actions if a["status"] in ("proposed","approved")]
+    active=[a for a in actions if a["status"] in ("proposed","approved") and (not focus_action_id or a["action_id"]==focus_action_id)]
+    if focus_action_id and not active:
+        selected=next((a for a in actions if a['action_id']==focus_action_id),None)
+        st.info('Selected request: '+status_label(selected['status'])+'. Choose a source node to prepare a new request.' if selected else 'This request is no longer available in this case.')
+        return
     for index,action in enumerate(active):
         with st.container(border=True):
             st.write("**"+ACTION_LABELS.get(action["action_type"],humanize(action["action_type"]))+"**")
@@ -309,15 +349,19 @@ def next_step(case,show_review=True):
             st.caption("Demo only — no message will be sent")
             if actor["role"] in ("admin","approver"):
                 if action["status"]=="proposed":
-                    approval_reason=st.text_area('Approval decision reason',value='Reviewed the supporting evidence and requested verification.',key='approval-reason-'+action['action_id'])
+                    approval_reason=st.text_area('Approval decision reason (required)',key='approval-reason-'+action['action_id'],placeholder='Why this request should or should not go ahead')
                     confirmed=st.checkbox("I reviewed this request and its evidence.",key="confirm-"+action["action_id"])
+                    ready=confirmed and len(approval_reason.strip())>=10
                     approve,reject=st.columns(2)
-                    if approve.button("Approve request",type="primary" if index==0 else "secondary",disabled=not confirmed,key="approve-"+action["action_id"]):
-                        review_action(path,action["action_id"],"approve",actor,approval_reason)
-                        notice("Request approved. It has not been applied yet."); st.rerun()
-                    if reject.button("Reject request",disabled=not confirmed,key="reject-"+action["action_id"]):
-                        review_action(path,action["action_id"],"reject",actor,approval_reason)
-                        notice("Request rejected. It cannot be applied."); st.rerun()
+                    try:
+                        if approve.button("Approve request",type="primary" if index==0 else "secondary",disabled=not ready,key="approve-"+action["action_id"]):
+                            review_action(path,action["action_id"],"approve",actor,approval_reason)
+                            notice("Request approved. It has not been applied yet."); st.rerun()
+                        if reject.button("Reject request",disabled=not ready,key="reject-"+action["action_id"]):
+                            review_action(path,action["action_id"],"reject",actor,approval_reason)
+                            notice("Request rejected. It cannot be applied."); st.rerun()
+                    except (ValueError,AuthorizationError) as error:
+                        st.error(str(error))
                     with st.expander("Ask for more information before deciding"):
                         clarification=st.text_area("What information is needed?",key="clarification-"+action["action_id"])
                         st.caption("Creates a local information task. This proposal stays waiting for approval; no message is sent.")
@@ -343,6 +387,9 @@ def next_step(case,show_review=True):
             if "weight_diff" in categories or values["weight_g"]["actual"] is None: choices.append("request_reweigh")
             if "photo_reuse" in categories or not rows("SELECT p.photo_id FROM photos p JOIN events e ON p.event_id=e.event_id WHERE e.shipment_id=?",(case["shipment_id"],)): choices.append("request_rephoto")
             if "count_discrepancy" in categories or values["count"]["actual"] is None: choices.append("request_rescan")
+        scene_request=st.session_state.get('scene_request',{}).get(case['case_id'])
+        if scene_request and scene_request['action'] not in choices:
+            choices.append(scene_request['action'])
         choices.append("submit_to_contract_ops")
         with st.container():
             with st.expander("Other actions"):
@@ -351,6 +398,9 @@ def next_step(case,show_review=True):
             descriptions={"request_reweigh":"Ask for a fresh weighing of this parcel. A supporting photo can be added as evidence.","request_rephoto":"Ask for an additional parcel photo to check the recorded evidence.","request_rescan":"Ask for a new package scan to check the recorded quantity.","submit_to_contract_ops":"Record a referral for an operations review of the issue. This demo does not route the referral to another system."}
             st.write(descriptions[action_type])
             initial="The handover weight is "+difference_weight(values["weight_g"]["diff"])+" than the dispatch record." if action_type=="request_reweigh" and values["weight_g"]["diff"] else concern(case)+". Please review the source evidence."
+            if scene_request:
+                st.info('From 3D workspace: '+scene_request['label']+' · '+scene_request['time'])
+                st.caption('The selected source will be linked to this request and its audit record.')
             reason=draft_input("text_area","Reason for the request",case["case_id"],"request-reason",value=initial,max_chars=2000)
             st.caption("Shipment: "+case["shipment_id"])
             st.caption("An authorized demo supervisor reviews this request. The active reviewer identity and reason are recorded on the decision.")
@@ -362,9 +412,10 @@ def next_step(case,show_review=True):
         if submitted:
             if len(reason.strip())<10: st.error("Add a short reason of at least 10 characters. Your draft has been kept.")
             else:
-                fingerprint=hashlib.sha256(json.dumps([case["case_id"],actor["actor_id"],action_type,reason.strip()]).encode()).hexdigest()
+                source_event_id=scene_request.get("event_id") if scene_request else None
+                fingerprint=hashlib.sha256(json.dumps([case["case_id"],actor["actor_id"],action_type,reason.strip(),source_event_id]).encode()).hexdigest()
                 request_id=st.session_state.setdefault("proposal_ids",{}).setdefault(fingerprint,str(uuid.uuid4()))
-                result=propose_action(path,case["case_id"],action_type,actor,reason=reason.strip(),request_id=request_id)
+                result=propose_action(path,case["case_id"],action_type,actor,reason=reason.strip(),request_id=request_id,source_event_id=source_event_id)
                 notice("Request submitted. Waiting for supervisor approval." if result["status"]=="proposed" else "This request already has a recorded decision. Change the next step or reason to submit another request."); st.rerun()
     elif actor["role"]=="partner_user": st.caption("An internal reviewer can request the next verification step.")
     if show_review and actor["role"] in ("admin","investigator","approver"):

@@ -3,7 +3,7 @@ import os
 
 DEFAULT_MODEL = 'openai/gpt-oss-20b'
 GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
-CONFIG_KEYS = ('AI_PROVIDER','GROQ_API_KEY','GROQ_MODEL','GROQ_WORKSPACE_HOURLY','GROQ_GLOBAL_DAILY')
+CONFIG_KEYS = ('AI_PROVIDER','GROQ_API_KEY','GROQ_MODEL','GROQ_WORKSPACE_HOURLY','GROQ_GLOBAL_DAILY','GROQ_MINUTE_TOKENS','GROQ_DAILY_TOKENS','GROQ_TOOL_PROTOCOL')
 
 def load_server_configuration(secrets):
     """Streamlit server secrets override environment; .env is not auto-loaded."""

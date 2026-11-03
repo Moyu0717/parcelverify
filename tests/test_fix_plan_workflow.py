@@ -26,11 +26,11 @@ def test_rejection_pending_and_role_restrictions(demo):
     action=propose_action(path,cid,'request_reweigh',INV,reason='Obtain a fresh scale reading')['action_id']
     assert execute_action(path,action,SUP)['status']=='not_approved'
     for actor in (INV,PARTNER):
-        with pytest.raises(AuthorizationError):review_action(path,action,'approve',actor)
+        with pytest.raises(AuthorizationError):review_action(path,action,'approve',actor,'Reviewed the evidence for this test')
         with pytest.raises(AuthorizationError):execute_action(path,action,actor)
     review_action(path,action,'reject',SUP,'Existing request needs a more precise measurement method')
     assert execute_action(path,action,SUP)['status']=='not_approved'
-    with pytest.raises(IdempotencyError):review_action(path,action,'approve',SUP)
+    with pytest.raises(IdempotencyError):review_action(path,action,'approve',SUP,'Reviewed the evidence for this test')
     with get_connection(path) as conn:
         assert not conn.execute('SELECT 1 FROM evidence_tasks WHERE case_id=? AND task_type=?',(cid,'reweigh')).fetchone()
         audit=conn.execute("SELECT actor_id,details_json FROM audit_log WHERE case_id=? AND operation='action_rejected'",(cid,)).fetchone()
