@@ -224,14 +224,28 @@ def test_rephoto_aimed_at_handover_while_citing_the_delivery_photo_is_retargeted
     assert notes['proposal_target_set_by_server'] == {'ai_named': handover, 'server_target': pod}
 
 
-def test_rephoto_citing_two_photo_records_is_dropped(seeded_db):
+def test_rephoto_target_is_the_reused_photo_record_whatever_the_model_cites(seeded_db):
+    """Live 2026-11-04: citations did not pin one record. The server computes which photo is reused."""
     _, presented = _demo_findings(seeded_db)
     handover, handover_photos = _demo_event(seeded_db, 'handoff_submitted')
     pod, pod_photos = _demo_event(seeded_db, 'pod_submitted')
     proposal = {'action_type': 'request_rephoto', 'source_event_id': dispatch_event(seeded_db), 'finding_ids': _ids(presented, 'photo_reuse'),
-                'reason': 'r', 'evidence_ids': handover_photos + pod_photos, 'draft_message': ''}
+                'reason': 'r', 'evidence_ids': handover_photos + pod_photos + [handover], 'draft_message': ''}
     checked, note = _check(seeded_db, proposal, presented)
-    assert checked['proposed_action'] is None and note
+    assert note is None and checked['proposed_action']['source_event_id'] == pod
+
+
+def test_rephoto_without_any_reused_photo_is_dropped_with_candidate_count(seeded_db):
+    _, presented = _demo_findings(seeded_db)
+    pod, pod_photos = _demo_event(seeded_db, 'pod_submitted')
+    with get_connection(seeded_db) as conn:
+        conn.execute("UPDATE photos SET sha256='unique-'||photo_id, phash=NULL WHERE event_id IN (SELECT event_id FROM events WHERE shipment_id='PV-DEMO-001')"); conn.commit()
+    proposal = {'action_type': 'request_rephoto', 'source_event_id': pod, 'finding_ids': _ids(presented, 'photo_reuse'),
+                'reason': 'r', 'evidence_ids': pod_photos, 'draft_message': ''}
+    notes = {}
+    with get_connection(seeded_db) as conn:
+        checked, note = _check_proposal(conn, {'proposed_action': proposal}, 'PV-DEMO-001', set(pod_photos) | {pod}, presented, notes)
+    assert checked['proposed_action'] is None and '0 candidates' in note and notes['proposal_candidates'] == []
 
 
 def dispatch_event(db):
@@ -303,7 +317,8 @@ def _claim_report(text):
 
 
 @pytest.mark.parametrize('text', ['Proof of delivery photo confirms delivery to the expected location.',
-                                  'The handover image clearly shows the parcel.', 'Photos verify the seal.'])
+                                  'The handover image clearly shows the parcel.', 'Photos verify the seal.',
+                                  'Proof of delivery photo and POD record confirm receipt at the destination but do not provide handoff weight data.'])
 def test_visual_confirmation_is_rejected(text):
     with pytest.raises(ClaimRejected):
         _validate_report(_claim_report(text), 'C', {'E1'})
@@ -322,7 +337,7 @@ def test_forbidden_wording_gets_one_rewrite_then_saves(seeded_db):
     result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=provider)
     assert result['status'] == 'completed', result.get('error')
     assert provider.calls == [False, True, True]
-    assert result['diagnostics']['claim_rewrite'] == {'term': 'photo confirms', 'outcome': 'passed'}
+    assert result['diagnostics']['claim_rewrite'] == {'term': 'the delivery photo confirms the address.', 'outcome': 'passed'}
 
 
 def test_second_forbidden_wording_fails_closed(seeded_db):

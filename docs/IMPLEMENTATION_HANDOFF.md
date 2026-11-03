@@ -1,5 +1,35 @@
 # ParcelVerify implementation handoff — 14 October 2026
 
+## Exact-file photo target and sentence-level claim check — 4 November 2026
+
+This follow-up retains the hosted Groq `openai/gpt-oss-120b` configuration and
+single mode. For a rephoto proposal, the server now determines the shipment's
+reused-photo event independently of model citations: exact cross-shipment file
+matches take priority over perceptual similarity. Multiple exact targets still
+remain ambiguous. Candidate IDs/counts are recorded when no unique target exists.
+
+Visual claim validation now checks a whole sentence for photo nouns and
+confirming verbs, with a record-level reuse/matching exception. The existing
+one-rewrite request/deadline bounds and fail-closed behavior remain unchanged.
+The supplied tests include the previously missed combined photo/POD wording
+and exact-file priority despite citations to both delivery and handover photos.
+
+The missing-weight demo already displays an open `Provide handoff weight`
+workflow. No new AI proposal is required there; do not add duplicate requests
+or change the allowed finding/action mapping merely to obtain a proposal.
+This corrects the earlier interpretation of that scenario's empty proposal.
+
+Verification: full offline/mocked regression suite passed, **324 tests in
+290.65 seconds**, using `python -m pytest -q -o faulthandler_timeout=60` in the
+normal Windows environment. An earlier sandbox run was interrupted after
+prolonged lack of progress and is not counted as passing.
+
+After owner Reboot, verify only A (`PV-DEMO-001`) and missing weight
+(`PV-SHIP-021`) once each, at least two minutes apart. B's prior real run is
+retained and must not be repeated. Keep records and access settings unchanged.
+Deployment and live evidence are tracked separately from mocked tests in
+`qa/artifacts/reuse-target-120b/`. No UI migration is included.
+
 ## Target resolution and one claim rewrite — 4 November 2026
 
 The hosted configuration was read before deployment and already selects

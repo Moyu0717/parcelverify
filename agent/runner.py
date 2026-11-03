@@ -160,10 +160,21 @@ class ClaimRejected(ValueError):
         self.term = term
 
 
-# Photo + confirming verb within two words ("delivery photo confirms ..."), unless it is about the reuse check or IDs.
-VISUAL_CLAIM = (r"\b(?:photo|photos|image|images|picture|pictures|photograph|photographs)\s+"
-                r"(?!(?:reuse|hash|hashes|id|ids|match|matches|matching|record|records|metadata|check)\b)(?:\S+\s+){0,2}?"
-                r"(?:confirms?|confirmed|shows?|showed|proves?|proved|verif(?:y|ies|ied)|demonstrates?|depicts?|reveals?)\b")
+# Sentence level (live 2026-11-04: "Proof of delivery photo and POD record confirm receipt" slipped past a
+# word-distance rule). A sentence that mentions a photo and a confirming verb is rejected, unless it is about
+# the reuse/hash comparison. A false positive only costs the one bounded rewrite.
+VISUAL_NOUN = r"\b(?:photo|photos|image|images|picture|pictures|photograph|photographs)\b"
+VISUAL_VERB = (r"\b(?:confirms?|confirmed|confirming|shows?|showed|shown|showing|proves?|proved|proven|verif(?:y|ies|ied)|"
+               r"demonstrates?|demonstrated|depicts?|depicted|reveals?|revealed|indicates?|indicated|evidences?|establish(?:es|ed)?)\b")
+VISUAL_ALLOWED = r"\b(?:reuse|reused|hash|hashes|match|matches|matched|matching|identical|duplicate|same file)\b"
+
+
+def _visual_claim(sentences):
+    for sentence in sentences:
+        sentence = sentence.strip().lower()
+        if re.search(VISUAL_NOUN, sentence) and re.search(VISUAL_VERB, sentence) and not re.search(VISUAL_ALLOWED, sentence):
+            return sentence[:60]
+    return None
 
 
 def _validate_report(data, case_id, available):
@@ -182,9 +193,13 @@ def _validate_report(data, case_id, available):
     # Strip only explicit negative disclaimers, never an entire sentence.
     claims = re.sub(r"\b(?:not (?:proof|evidence) of|no (?:proof|evidence) of|does not (?:prove|confirm)) (?:fraud|theft|tampering|responsibility)\b", "", claims)
     claims = re.sub(r"\b(?:cannot|can not|does not) (?:establish|determine|confirm) (?:fraud|theft|responsibility)\b", "", claims)
-    match = re.search(forbidden, claims) or re.search(VISUAL_CLAIM, claims)
+    match = re.search(forbidden, claims)
     if match:
         raise ClaimRejected(match.group(0)[:60])
+    texts = [report.summary, *(f.text for f in report.facts), report.recommended_action, *([proposal.reason, proposal.draft_message] if proposal else [])]
+    visual = _visual_claim(part for text in texts for part in re.split(r"(?<=[.;!?])\s+|\n", text or ""))
+    if visual:
+        raise ClaimRejected(visual)
     return report.model_dump(mode="json")
 
 
@@ -620,7 +635,7 @@ ACTION_TEXT = {'request_reweigh': 'weigh the parcel again and submit the new wei
                'request_rescan': 'count and scan the packages again and submit the result'}
 
 
-def _resolve_target(conn, proposal, shipment_id, findings):
+def _resolve_target(conn, proposal, shipment_id, findings, diagnostics=None):
     """Pick the target event on the server from what the proposal and its findings cite.
 
     Small models named the wrong record twice in live runs (2026-11-03). The target is the one
@@ -644,10 +659,28 @@ def _resolve_target(conn, proposal, shipment_id, findings):
             fits = event_type != 'dispatch_confirmed' and (payload.get('count') is not None or payload.get('seal_id') is not None) and event_id in refs
         if fits:candidates.append(event_id)
     if action == 'request_rephoto':
-        # Records whose photo is cited win over records cited only by ID.
-        by_photo = [e for e in candidates if {r[0] for r in conn.execute('SELECT photo_id FROM photos WHERE event_id=?', (e,))} & refs]
-        candidates = by_photo or candidates
+        # The photo finding is about reuse, so the target is the shipment record whose photo matches a photo on
+        # another shipment, computed here. Model citations are ignored (live 2026-11-04: they did not pin one record).
+        candidates = _reused_photo_events(conn, shipment_id)
+    if diagnostics is not None:diagnostics['candidates'] = candidates[:5]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _reused_photo_events(conn, shipment_id):
+    """Events on this shipment whose photo has an exact or near (pHash) match on another shipment."""
+    from contracts import PHASH_DISTANCE_THRESHOLD
+    from services.photos import _hamming_distance
+    own = conn.execute('SELECT p.photo_id,p.event_id,p.sha256,p.phash FROM photos p JOIN events e ON e.event_id=p.event_id WHERE e.shipment_id=? ORDER BY e.occurred_at', (shipment_id,)).fetchall()
+    others = conn.execute('SELECT p.sha256,p.phash FROM photos p JOIN events e ON e.event_id=p.event_id WHERE e.shipment_id!=?', (shipment_id,)).fetchall()
+    # Exact file matches decide first; visual (pHash) similarity is only a fallback, because similar-looking
+    # synthetic photos made both the handover and delivery records qualify in the live run.
+    exact, similar = [], []
+    for _, event_id, sha, phash in own:
+        if sha and any(sha == other_sha for other_sha, _ in others):
+            if event_id not in exact:exact.append(event_id)
+        elif phash and any(other_phash and _hamming_distance(phash, other_phash) <= PHASH_DISTANCE_THRESHOLD for _, other_phash in others):
+            if event_id not in similar:similar.append(event_id)
+    return exact or similar
 
 
 def proposal_request_text(conn, proposal, shipment_id):
@@ -681,8 +714,11 @@ def _check_proposal(conn, report, shipment_id, available, presented_findings=Non
                     if (presented_findings or {}).get(f, {}).get('category') in ACTION_FINDINGS[proposal['action_type']]]
         if not matching:problem = 'none of the named findings is the kind this request addresses'
         else:
-            target = _resolve_target(conn, proposal, shipment_id, [presented_findings[f] for f in matching])
-            if not target:problem = 'no single cited record fits this request'
+            found = {}
+            target = _resolve_target(conn, proposal, shipment_id, [presented_findings[f] for f in matching], found)
+            if not target:
+                problem = 'no single record fits this request (' + str(len(found.get('candidates', []))) + ' candidates)'
+                if notes is not None:notes['proposal_candidates'] = found.get('candidates', [])
             else:
                 if target != proposal['source_event_id']:
                     if notes is not None:notes['proposal_target_set_by_server'] = {'ai_named': proposal['source_event_id'], 'server_target': target}
