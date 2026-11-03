@@ -57,7 +57,8 @@ def test_http_failure_persists_stage_and_does_not_save_report(seeded_db):
     p=ScriptedProvider([httpx.HTTPStatusError('private body',request=request,response=response)])
     result=investigate_case(seeded_db,cid,ADMIN_ACTOR,provider=p,request_id='failed-click')
     assert result['status']=='invalid_output' and result['report'] is None
-    assert len(p.calls)==1 and not result['tool_calls']
+    # Only the server prefetch ran; the failed model request added no tool call.
+    assert len(p.calls)==1 and [c['source'] for c in result['tool_calls']]==['server_prefetch']
     with get_connection(seeded_db) as conn:
         saved=conn.execute('SELECT diagnostics_json FROM investigation_runs WHERE run_id=?',(result['run_id'],)).fetchone()[0]
         assert json.loads(saved)['stage']=='tool_selection_request'

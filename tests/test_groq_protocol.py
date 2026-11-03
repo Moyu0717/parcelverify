@@ -5,6 +5,7 @@ import pytest
 from agent.runner import ModelProvider,investigate_case
 from agent.groq_protocol import local_tools,read_selection,selection_messages
 from contracts import TOOL_WHITELIST
+from db import get_connection
 from tests.test_agent import seeded_db,ADMIN_ACTOR,_create_case_for_investigation,valid_report
 
 def test_only_read_only_allowlisted_functions_are_declared():
@@ -52,7 +53,10 @@ def test_native_request_tool_result_and_final_schema_are_separate(seeded_db,monk
     monkeypatch.setattr('agent.runner.httpx.Client',lambda **kwargs:client_type(transport=httpx.MockTransport(handler)))
     result=investigate_case(seeded_db,cid,ADMIN_ACTOR,provider=ModelProvider(),request_id='native-regression')
     assert result['status']=='completed' and result['report']['facts']
-    assert len(result['tool_calls'])==1 and len(requests)==3
+    # The model's get_case_context choice repeats the server prefetch: one dispatch, one slot used.
+    assert [c['source'] for c in result['tool_calls']]==['server_prefetch','duplicate_selection'] and len(requests)==3
+    with get_connection(seeded_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tool_executions WHERE run_id=? AND tool_name='get_case_context' AND source!='duplicate_selection'",(result['run_id'],)).fetchone()[0]==1
     assert 'private-test-value' not in str(requests) and 'private-test-value' not in str(result)
 
 def test_unpaired_selection_is_rejected_before_transport():

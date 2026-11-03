@@ -62,9 +62,11 @@ def test_groq_transport_is_fixed_bounded_and_no_hosted_tools(monkeypatch):
 def test_one_transient_retry_and_six_request_ceiling(seeded_db):
     cid=_create_case_for_investigation(seeded_db)['case_id']
     call={'tool_call':{'tool':'get_partner_metrics','params':{}}}
-    p=ScriptedProvider([http_error(503),call,call,call,call,valid_report()])
+    # Server prefetch takes one of four tool slots: 1 retry + 3 selections + 1 report = 5 requests.
+    p=ScriptedProvider([http_error(503),call,call,call,valid_report()])
     r=investigate_case(seeded_db,cid,ADMIN_ACTOR,provider=p)
-    assert r['status']=='completed' and r['request_count']==6 and len(r['tool_calls'])==4
+    assert r['status']=='completed' and r['request_count']==5 and len(r['tool_calls'])==4
+    assert [c['source'] for c in r['tool_calls']]==['server_prefetch','agent','agent','agent']
     p=ScriptedProvider([http_error(503)]*2)
     r=investigate_case(seeded_db,cid,ADMIN_ACTOR,provider=p)
     assert r['status']=='error' and len(p.calls)==2 and r['report'] is None

@@ -283,6 +283,7 @@ def ai_summary(case):
             if report['missing_evidence']:
                 st.markdown('**What is missing**')
                 for item in report['missing_evidence']:st.write('• '+item)
+            agent_proposal_card(path,case,report,actor)
             st.caption('Safeguards passed: every fact cites evidence a tool returned · no blame, fraud or photo claims · read-only tools only · a person decides. '+(report.get('limitations') or 'Text records only. AI does not inspect photographs or approve actions.'))
     token=ai_request_token(case['case_id'])
     if actor['role'] in ('admin','investigator') and st.button(state['action'],disabled=not state['can_run'],key='ai-'+case['case_id']+'-'+token):
@@ -301,6 +302,31 @@ def ai_summary(case):
             trace=rows('SELECT tool_name,result_summary,evidence_ids_json FROM tool_executions WHERE run_id=?',(state['reference'],)) if state['reference'] else []
             st.download_button('Download AI diagnostic record',json.dumps({'run':state['run'],'tools':trace},indent=2),file_name='parcelverify-ai-diagnostic.json')
             if trace:st.json(trace)
+
+PROPOSAL_STATUS={'proposed':'AI proposed · waiting for a supervisor','approved':'Approved by a supervisor · waiting to be sent',
+ 'executed':'Approved and sent','rejected':'Rejected by a supervisor','expired':'Expired'}
+
+def agent_proposal_card(path,case,report,actor):
+    """'AI proposed' is shown only when the request is stored; otherwise offer to submit it again."""
+    from agent.runner import agent_proposal_status, submit_agent_proposal
+    from ui.case_workflow import source_label
+    proposal=report.get('proposed_action')
+    st.markdown('**AI proposed request**')
+    if not proposal:
+        st.caption('No action proposed. The AI found no follow-up request it could ground in the evidence.')
+        return
+    st.write(ACTION_LABELS.get(proposal['action_type'],proposal['action_type'])+' · for '+source_label(proposal['source_event_id']))
+    st.write('Why: '+proposal['reason'])
+    if proposal.get('draft_message'):st.caption('Draft message: '+proposal['draft_message'])
+    stored=agent_proposal_status(path,case['case_id'],proposal)
+    if stored:
+        st.info(PROPOSAL_STATUS.get(stored['status'],stored['status'])+'. The AI cannot approve or send it.')
+        return
+    st.warning('Report complete; the proposal is not yet submitted as a request.')
+    if actor['role'] in ('admin','investigator') and st.button('Submit AI proposal for approval',key='agent-proposal-'+case['case_id']):
+        out=submit_agent_proposal(path,case['case_id'],report,actor)
+        if out['status']=='not_submitted':st.error(out['message'])
+        else:st.rerun()
 
 TOOL_PURPOSE={'get_case_context':'Read the case findings and linked handoffs','get_shipment_timeline':'Read every recorded stop and photo ID',
  'compare_handoff':'Compare weight, count and seal with dispatch','find_photo_reuse':'Check if a photo was used on another shipment',

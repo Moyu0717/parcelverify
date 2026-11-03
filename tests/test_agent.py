@@ -234,11 +234,13 @@ class TestInvestigateCase:
     def test_four_round_limit(self, seeded_db):
         case = _create_case_for_investigation(seeded_db)
         call = {"tool_call":{"tool":"get_partner_metrics","params":{}}}
-        provider = ScriptedProvider([call]*4+[valid_report()])
+        # The server prefetch uses one of the four tool slots, leaving three model selections.
+        provider = ScriptedProvider([call]*3+[valid_report()])
         result = investigate_case(seeded_db,case["case_id"],ADMIN_ACTOR,provider=provider)
         assert result["status"] == "completed"
         assert len(result["tool_calls"]) == 4
-        assert provider.calls == [False]*4+[True]
+        assert result["tool_calls"][0]["tool"] == "get_case_context" and result["tool_calls"][0]["source"] == "server_prefetch"
+        assert provider.calls == [False]*3+[True]
 
 @pytest.mark.parametrize("verdict",["needs_review","insufficient_evidence","consistent"])
 def test_report_preserves_review_need(seeded_db,verdict):

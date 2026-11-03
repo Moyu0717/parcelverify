@@ -46,7 +46,9 @@ def test_partial_run_keeps_failed_tools(seeded_db,failure):
     assert result["status"] in ("error","timeout") and result["report"] is None
     with get_connection(seeded_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM report_versions").fetchone()[0] == 0
-        row = conn.execute("SELECT result_summary,run_id,report_id FROM tool_executions").fetchone()
+        rows = conn.execute("SELECT result_summary,run_id,report_id,source FROM tool_executions ORDER BY rowid").fetchall()
+        assert rows[0][3] == "server_prefetch"
+        row = rows[1]
         assert "Error" in row[0] and row[1] and row[2] is None
         assert conn.execute("SELECT error FROM investigation_runs").fetchone()[0]
 

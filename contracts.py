@@ -232,6 +232,23 @@ class ReportFact(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+# Actions the investigation agent may draft. Holds, restrictions and contract
+# referrals stay human-only. The draft is validated by the server and filed under
+# the agent's own identity; a different human must approve it before anything runs.
+AGENT_PROPOSABLE_ACTIONS: tuple[str, ...] = ("request_reweigh", "request_rephoto", "request_rescan")
+
+
+class ProposedAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action_type: Literal["request_reweigh", "request_rephoto", "request_rescan"]
+    source_event_id: str = Field(max_length=160)
+    # Stable database finding IDs this request addresses (only ones shown to the model).
+    finding_ids: list[str] = Field(default_factory=list, max_length=6)
+    reason: str = Field(max_length=400)
+    evidence_ids: list[str] = Field(default_factory=list)
+    draft_message: str = Field(default="", max_length=600)
+
+
 class InvestigationReport(BaseModel):
     """Final structured report from the investigation agent."""
     model_config = ConfigDict(extra="forbid")
@@ -244,6 +261,8 @@ class InvestigationReport(BaseModel):
     recommended_action: str = ""
     requires_approval: bool = True
     limitations: str = ""
+    # None means the evidence does not support a specific request (a valid outcome).
+    proposed_action: ProposedAction | None = None
 
     @field_validator("verdict", mode="before")
     @classmethod

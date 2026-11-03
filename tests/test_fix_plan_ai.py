@@ -48,7 +48,9 @@ def test_second_request_unregistered_function_correction_is_bounded(seeded_db,mo
     assert result['diagnostics']['request_history'][1]['provider_code']=='tool_use_failed'
     assert 'private evidence' not in str(result) and 'private-test-key' not in str(result)
     assert result['request_count']==(5 if recover else 3)
-    assert len(result['tool_calls'])==(2 if recover else 1)
+    assert [c['source'] for c in result['tool_calls']]==(['server_prefetch','duplicate_selection','agent'] if recover else ['server_prefetch','duplicate_selection'])
+    with get_connection(seeded_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tool_executions WHERE tool_name='get_case_context' AND source!='duplicate_selection'").fetchone()[0]==1
     with get_connection(seeded_db) as conn:
         assert conn.execute('SELECT COUNT(*) FROM report_versions').fetchone()[0]==(1 if recover else 0)
     assert result['status']==('completed' if recover else 'error')
@@ -71,7 +73,7 @@ def test_truncated_selection_is_not_retried_or_reported_as_success(seeded_db,mon
     client_type=httpx.Client
     monkeypatch.setattr('agent.runner.httpx.Client',lambda **kwargs:client_type(transport=httpx.MockTransport(handler)))
     result=investigate_case(seeded_db,cid,ADMIN_ACTOR,provider=ModelProvider())
-    assert result['status']!='completed' and result['report'] is None and not result['tool_calls']
+    assert result['status']!='completed' and result['report'] is None and [c['source'] for c in result['tool_calls']]==['server_prefetch']
     assert len(requests)==1 and result['diagnostics']['finish_reason']=='length'
     with get_connection(seeded_db) as conn:
         assert not conn.execute('SELECT 1 FROM report_versions').fetchone()
