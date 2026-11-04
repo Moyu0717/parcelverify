@@ -169,15 +169,23 @@ VISUAL_VERB = (r"\b(?:confirms?|confirmed|confirming|shows?|showed|shown|showing
 VISUAL_ALLOWED = r"\b(?:reuse|reused|hash|hashes|match|matches|matched|matching|identical|duplicate|same file)\b"
 
 
-def _visual_claim(sentences):
-    for sentence in sentences:
-        sentence = sentence.strip().lower()
-        if re.search(VISUAL_NOUN, sentence) and re.search(VISUAL_VERB, sentence) and not re.search(VISUAL_ALLOWED, sentence):
-            return sentence[:60]
-    return None
+def _is_visual_claim(sentence):
+    sentence = sentence.strip().lower()
+    return bool(re.search(VISUAL_NOUN, sentence) and re.search(VISUAL_VERB, sentence) and not re.search(VISUAL_ALLOWED, sentence))
 
 
-def _validate_report(data, case_id, available):
+def _strip_visual(text, removed):
+    """Drop visual-claim sentences from text, appending each dropped sentence to removed."""
+    kept = []
+    for part in re.split(r"(?<=[.;!?])\s+|\n", text or ""):
+        if _is_visual_claim(part):
+            removed.append(part.strip())
+        elif part.strip():
+            kept.append(part.strip())
+    return " ".join(kept)
+
+
+def _validate_report(data, case_id, available, notes=None):
     if data.get("case_id", case_id) != case_id:
         raise ValueError("Report refers to a different case")
     data = dict(data, case_id=case_id)
@@ -196,11 +204,24 @@ def _validate_report(data, case_id, available):
     match = re.search(forbidden, claims)
     if match:
         raise ClaimRejected(match.group(0)[:60])
-    texts = [report.summary, *(f.text for f in report.facts), report.recommended_action, *([proposal.reason, proposal.draft_message] if proposal else [])]
-    visual = _visual_claim(part for text in texts for part in re.split(r"(?<=[.;!?])\s+|\n", text or ""))
-    if visual:
-        raise ClaimRejected(visual)
-    return report.model_dump(mode="json")
+    # Visual-claim sentences are removed from the summary and facts only; action wording such as
+    # "request a re-photo ... to confirm" in recommended_action or the proposal is left untouched.
+    result = report.model_dump(mode="json")
+    removed = []
+    result["summary"] = _strip_visual(result["summary"], removed)
+    facts = []
+    for fact in result["facts"]:
+        fact["text"] = _strip_visual(fact["text"], removed)
+        if fact["text"]:
+            facts.append(fact)
+    result["facts"] = facts
+    if removed:
+        if not result["summary"]:
+            raise ClaimRejected(removed[0][:60])
+        result["limitations"] = (result.get("limitations") or "") + f" Server removed {len(removed)} statement(s) describing photo content, which the AI cannot see."
+        if notes is not None:
+            notes["visual_claims_removed"] = removed
+    return result
 
 
 # Short field guide for the final request. The strict response_format (when used)
@@ -531,7 +552,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         raw_report=generate(final=True)
         stage='output_validation'
         try:
-            report = _validate_report(raw_report,case_id,available)
+            report = _validate_report(raw_report,case_id,available,diagnostics)
         except ClaimRejected as exc:
             # One bounded rewrite (counts toward the request budget); a second violation fails closed.
             diagnostics['claim_rewrite']={'term':exc.term}
@@ -541,7 +562,7 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
             stage='final_request'
             raw_report=generate(final=True)
             stage='output_validation'
-            report = _validate_report(raw_report,case_id,available)
+            report = _validate_report(raw_report,case_id,available,diagnostics)
             diagnostics['claim_rewrite']['outcome']='passed'
         report, proposal_note = _check_proposal(conn, report, shipment_id, available, presented_findings, diagnostics)
         if proposal_note:diagnostics['proposal_dropped']=proposal_note

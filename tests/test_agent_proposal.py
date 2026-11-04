@@ -319,9 +319,22 @@ def _claim_report(text):
 @pytest.mark.parametrize('text', ['Proof of delivery photo confirms delivery to the expected location.',
                                   'The handover image clearly shows the parcel.', 'Photos verify the seal.',
                                   'Proof of delivery photo and POD record confirm receipt at the destination but do not provide handoff weight data.'])
-def test_visual_confirmation_is_rejected(text):
-    with pytest.raises(ClaimRejected):
-        _validate_report(_claim_report(text), 'C', {'E1'})
+def test_visual_confirmation_is_removed_and_recorded_without_another_request(text):
+    report = dict(_claim_report(text), facts=[{'text': text, 'evidence_ids': ['E1']},
+                                              {'text': 'Weight is 1850 g.', 'evidence_ids': ['E1']}])
+    notes = {}
+    out = _validate_report(report, 'C', {'E1'}, notes)
+    assert [f['text'] for f in out['facts']] == ['Weight is 1850 g.']
+    assert notes['visual_claims_removed'] == [text]
+    assert 'removed 1 statement' in out['limitations']
+
+
+def test_action_wording_mentioning_photos_is_not_a_visual_claim():
+    action = 'Request a re-weigh of the handoff and a re-photo of the proof-of-delivery photo to confirm the record.'
+    notes = {}
+    out = _validate_report(dict(valid_report(), case_id='C', recommended_action=action), 'C', {'E1'}, notes)
+    assert out['recommended_action'] == action
+    assert 'visual_claims_removed' not in notes
 
 
 @pytest.mark.parametrize('text', ['The photo reuse check shows an exact match with PV-SHIP-010.',
@@ -330,14 +343,14 @@ def test_record_level_photo_statements_are_allowed(text):
     _validate_report(_claim_report(text), 'C', {'E1'})
 
 
-def test_forbidden_wording_gets_one_rewrite_then_saves(seeded_db):
+def test_summary_that_is_only_a_visual_claim_gets_one_rewrite_then_saves(seeded_db):
     case = _create_case_for_investigation(seeded_db)
     bad = dict(valid_report(), summary='The delivery photo confirms the address.')
     provider = ScriptedProvider([{'done': True}, bad, valid_report()])
     result = investigate_case(seeded_db, case['case_id'], ADMIN, provider=provider)
     assert result['status'] == 'completed', result.get('error')
     assert provider.calls == [False, True, True]
-    assert result['diagnostics']['claim_rewrite'] == {'term': 'the delivery photo confirms the address.', 'outcome': 'passed'}
+    assert result['diagnostics']['claim_rewrite'] == {'term': 'The delivery photo confirms the address.', 'outcome': 'passed'}
 
 
 def test_second_forbidden_wording_fails_closed(seeded_db):
