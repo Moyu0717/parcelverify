@@ -97,3 +97,16 @@ def test_local_token_estimate_counts_declared_tools_and_schema(seeded_db, monkey
     assert selection == (provider.sizes[0] + runner._TOOL_DEFS_CHARS + 2) // 3 + 512
     assert final == (provider.sizes[1] + runner._REPORT_SCHEMA_CHARS + 2) // 3 + 1024
     assert [attempt['reserved_tokens'] for attempt in result['diagnostics']['request_history']]==reserved
+
+
+def test_low_remaining_time_skips_tool_selection_and_still_writes_the_report(seeded_db, monkeypatch):
+    """Live 2026-11-04: an extra selection request used the time the final report needed."""
+    case = _create_case_for_investigation(seeded_db)
+    monkeypatch.setattr(runner, 'reserve_request', lambda tokens: None)
+    monkeypatch.setattr(runner, 'FINAL_REPORT_RESERVE_S', runner.TOTAL_TIME_BUDGET_S + 1)
+    provider = Recorder([valid_report()])
+    monkeypatch.setattr(runner, 'ModelProvider', lambda: provider)
+    result = investigate_case(seeded_db, case['case_id'], ADMIN_ACTOR)
+    assert result['status'] == 'completed', result.get('error')
+    assert provider.calls == [True]  # no selection request, straight to the report
+    assert result['diagnostics']['selection_stopped_for_time'] == 1  # only the server-prefetched context

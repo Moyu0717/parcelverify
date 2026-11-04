@@ -325,7 +325,8 @@ DISPLAY_THRESHOLD_SHIPMENTS: int = 20
 
 # Investigation constraints
 MAX_TOOL_ROUNDS: int = 4
-TOTAL_TIME_BUDGET_S: int = 240  # free-tier Groq (8K tokens/min) needs ~1-3 min for a full run
+TOTAL_TIME_BUDGET_S: int = 420  # free-tier Groq (8K tokens/min): ~1.5 requests/min, so 5 requests need ~4-5 min (live 2026-11-04)
+FINAL_REPORT_RESERVE_S: int = 130  # stop choosing tools when less is left, so the report itself still fits
 
 # Rule version
 RULE_VERSION: str = "1.1.0"

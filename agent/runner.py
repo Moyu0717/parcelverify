@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 import httpx
-from contracts import ActorContext, InvestigationReport, MAX_TOOL_ROUNDS, RULE_VERSION, TOTAL_TIME_BUDGET_S, TOOL_WHITELIST, AGENT_PROPOSABLE_ACTIONS
+from contracts import ActorContext, InvestigationReport, MAX_TOOL_ROUNDS, FINAL_REPORT_RESERVE_S, RULE_VERSION, TOTAL_TIME_BUDGET_S, TOOL_WHITELIST, AGENT_PROPOSABLE_ACTIONS
 from db import get_connection
 from agent.tools import dispatch_tool, authorize_case, evidence_is_authorized
 from agent.tool_registry import validate_tool_arguments, tool_definitions
@@ -525,6 +525,11 @@ def investigate_case(db_path="data/parcelverify.db", case_id="", actor_context=N
         except ValueError as exc:
             raise ValueError('The case context could not be loaded, so no AI proposal can be made. Continue manual review.') from exc
         while len(result['tool_calls'])<MAX_TOOL_ROUNDS:
+            if real_provider and TOTAL_TIME_BUDGET_S-(time.monotonic()-start) < FINAL_REPORT_RESERVE_S:
+                # Live 2026-11-04: an extra selection request used the quota the final report needed.
+                # The evidence already retrieved is reported instead of selecting more tools.
+                diagnostics['selection_stopped_for_time']=len(result['tool_calls'])
+                break
             try:
                 selected = generate()
             except (ValueError,httpx.HTTPStatusError) as exc:
